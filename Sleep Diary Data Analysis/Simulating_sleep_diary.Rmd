@@ -1,0 +1,614 @@
+---
+title: "Simulating Sleep diary"
+author: "Olena Zaitseva , Jonna Teinonen"
+date: "01 12 2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Sleep diary of the intervention group analysis
+
+Download the sleep diary:  
+
+```{r, echo=FALSE}
+library("readxl")
+dataSD = read_excel("sleeping_diary_all_data.xlsx")
+```
+
+## Fix the data 
+
+1. Arrange (sort for convenience) based on user_id and date_wake_up 
+2. Select columns with our main variables => TST, SE, SOL, WASO, NA
+3. Calculate the entry time (Entry) => starting date = 0, +2 days later = 2, +3 days = 5, etc.
+4. Add a number for being in a treatment group -> 1 = dCBTi, 0 = Control (added later)
+
+```{r}
+library(dplyr)
+
+
+# Arranging the data based on ID and dates: only user-ID cases 4258, 4300 and 4343 has questionnaire post-results 
+
+# Calculating variable "Entry"
+
+dataSD_ordered_full = dataSD %>% select(user_id, date_wake_up, TST, "SE %", SOL, WASO, "NA") %>% arrange(user_id,date_wake_up) %>% group_by(user_id) %>%
+  mutate(Entry = as.numeric(difftime(date_wake_up, min(date_wake_up), units = "days"))) %>% ungroup()
+
+
+# add CBT-I treatment variable: "group" = 1 
+
+dataSD_ordered_full = dataSD_ordered_full %>% mutate(group = 1) #%>% mutate(group = coalesce(group, 1))
+
+dataSD_ordered_full = dataSD_ordered_full %>% select(user_id, TST, "SE %", Entry, group, SOL, WASO, "NA")
+
+# Renaming the variables
+colnames(dataSD_ordered_full) = c("user_id", "TST", "SE", "Entry", "group", "SOL", "WASO", "NumAw")
+
+head(dataSD_ordered_full, 10)
+```
+
+Check how many observations each person has?
+
+```{r}
+dataSD_ordered_full %>% count(user_id)
+```
+
+Investigate people with low observations counts:
+
+```{r}
+subset(dataSD_ordered_full, user_id %in% c(4255,4408, 4542,4545,4552))
+```
+
+User 4255 has 3 observations, however they had started (entry 27) the intervention. User 4408 - first 5 days - they can be used. Other 3 users: 4542,4545,4552 have only a few observations + they are in the first 4 days -> exclude them.  
+
+```{r}
+dataSD_ordered =  subset(dataSD_ordered_full, !(user_id %in% c(4542,4545,4552)))
+```
+
+## Inspection of the distributions
+
+Plot the distributions and inspect the histograms:
+
+```{r, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(jtools)
+library(gridExtra)
+```
+
+###  Densities, histograms, qqplots, tests
+
+```{r}
+
+
+plot1 = ggplot(dataSD_ordered, aes(x = as.numeric(TST))) + 
+  geom_histogram(aes(y = ..density..),
+                 colour = 1, fill = "cornflowerblue", bins = 50) + geom_density() +
+  xlab("TST (min)") + ylab("Density")
+
+plot2 = ggplot(dataSD_ordered, aes(x = as.numeric(SE))) + 
+  geom_histogram(aes(y = ..density..),
+                 colour = 1, fill = "cornflowerblue", bins = 50) + geom_density()+
+  xlab("SE (%)") + ylab("Density")
+
+plot3 = ggplot(dataSD_ordered, aes(x = as.numeric(SOL))) + 
+  geom_histogram(
+                 colour = 1, fill = "cornflowerblue", bins = 15) +
+  xlab("SOL (min)") 
+  
+plot4 = ggplot(dataSD_ordered, aes(x = as.numeric(WASO))) + 
+  geom_histogram( colour = 1, fill = "cornflowerblue", bins = 15) +  xlab("WASO (min)") 
+
+plot5 = ggplot(dataSD_ordered, aes(x = NumAw)) + 
+  geom_histogram(
+                 colour = 1, fill = "cornflowerblue", bins = 15) +
+  xlab("Number awake") 
+
+grid.arrange(plot1+theme_bw(), plot2 +theme_bw(), plot3+theme_bw() , plot4 +theme_bw(),plot5+theme_bw() ,ncol=2)
+
+```
+
+Clearly, only TST and to some extent SE% can act as 1. continuous and 2.with transformations become approximately normal. 
+
+WASO, SOL and NA have excess 0s and are heavily skewed => transformations and LMM are not recommended int this case.However, while SOL and WASO are essentially also continuous variables, the sleep diary design allows students to fill it in in intervals of 15min, so the variables can be recoded into counts.  NA - number of awakenings => already is a count.
+
+
+## TST and SE%
+
+Inspect the boxplot of TST:
+
+```{r}
+ggplot(dataSD_ordered, aes(x = TST)) +            
+  geom_boxplot()
+```
+
+Delete the outliers to inspect the plots:
+
+```{r}
+## get rid of outliers and inspect the qqplot
+x_tst = subset(dataSD_ordered, TST>250 & TST<650)
+
+# Using to explore the distribution of a variable
+ggplot(x_tst, aes(sample = as.numeric(TST))) + 
+  stat_qq() +
+  stat_qq_line()
+```
+
+The plot has the dots this way due to it being repeated measurements.
+
+
+```{r, echo=FALSE, warning=FALSE}
+# Distributions of the outcome variables
+hist(as.numeric(dataSD_ordered$TST,  na.rm = T), xlab = "TST", main = "Total Sleep Time", col = "blue")
+hist(as.numeric(dataSD_ordered$SE, na.rm = T),  xlab = "SE%", main = "Sleep Efficiency", col = "blue")
+
+```
+
+```{r}
+#subset without outliers
+x_se = subset(dataSD_ordered, SE>60)
+# Using to explore the distribution of a variable
+ggplot(x_se, aes(sample = as.numeric(SE))) + 
+  stat_qq() +
+  stat_qq_line()
+```
+
+We can see that only TST has approximately normal distributions, whereas SE% is left-skewed from the histogram (and the qqplot is very not normal). Therefore, transformations for SE% and probably TST will be appropriate. To be sure, the LMM assumptions (specifiaclly residuals distributions) has to be checked too.
+
+# Simulation 
+
+## First week of observations, "pre" test measurements 
+
+Based on the study design We expect that at the start of the study there is essentially no difference between the groups, since the intervention have not started yet.   
+
+First observations we take are based on the observations within first 7 days of the people that we have for all variables of interest.
+
+
+```{r, echo=FALSE}
+
+# Choosing  first 7 records for each user
+dataSD_pre = dataSD_ordered %>% select(user_id, TST, SE, NumAw, WASO, SOL, Entry) %>% filter(Entry<= 7) 
+
+#change user_id to unique ones for the control groups
+ids = unique(dataSD_pre$user_id)
+dataSD_pre = dataSD_pre %>% select(user_id, TST, SE, NumAw, WASO, SOL, Entry) %>% mutate(user_id = case_when( 
+                                                                      user_id == ids[1] ~ 1234,
+                                                                      user_id == ids[2] ~ 1857,
+                                                                      user_id == ids[3] ~ 1239,
+                                                                      user_id == ids[4] ~ 1948,
+                                                                      user_id == ids[5] ~ 1274,
+                                                                      user_id == ids[6] ~ 1894,
+                                                                      user_id == ids[7] ~ 1935,
+                                                                      user_id == ids[8] ~ 1289,
+                                                                       user_id == ids[9] ~ 1395
+                                                                      ))
+
+
+```
+
+### Compare means 
+
+* Overall means and sd
+
+```{r}
+# Calculating the mean and sd for each outcome variable (to get parameters for simulation)
+dataSD_stat1 <- data.frame(mean_all = c(
+ 
+  mean(x_tst$TST, na.rm = T),
+  mean(as.numeric(x_se$SE), na.rm = T)),
+  
+  sd_all = c(
+  
+  sd(x_tst$TST, na.rm = T),
+  sd(as.numeric(x_se$SE), na.rm = T))
+  )
+
+rownames(dataSD_stat1) <- c("TST", "SE")
+```
+
+
+* Pre (<7days) and Post (>7days) means and sd
+
+```{r}
+group2 = subset(dataSD_ordered,  Entry>7) #Post treatment
+
+
+# Calculating the mean and sd for each outcome variable (to get parameters for simulation)
+dataSD_pre_stat <- data.frame(
+  mean_pre = c(
+  mean(dataSD_pre$TST, na.rm = T),
+  mean(as.numeric(dataSD_pre$SE), na.rm = T)),
+  
+  sd_pre = c(
+  sd(dataSD_pre$TST, na.rm = T),
+  sd(as.numeric(dataSD_pre$SE), na.rm = T))
+  )
+
+
+dataSD_post_stat <- data.frame(
+  mean_post= c(
+  mean(group2$TST, na.rm = T),
+  mean(as.numeric(group2$SE), na.rm = T)),
+  
+  sd_post = c(
+  sd(group2$TST, na.rm = T),
+  sd(as.numeric(group2$SE), na.rm = T))
+  )
+
+
+dataSD_stat = cbind(dataSD_pre_stat, dataSD_post_stat, dataSD_stat1)
+dataSD_stat
+```
+
+We can see the changes that way (for example, increase in the mean TST and SE% from the first week and next), but to additionally investigate this we can use Within Cohen's ds.
+
+### Cohen's d wihitn the intervention
+
+Check the differences between pre and post treatment withing the intervention group:
+
+```{r}
+library(effsize)
+```
+ * TST
+
+```{r}
+# TST
+cohen.d(group2$TST,dataSD_pre$TST)
+```
+Small effect size, increase in TST.
+
+* SE% 
+
+```{r}
+# SE
+cohen.d(as.numeric(group2$SE), as.numeric(dataSD_pre$SE))
+```
+Medium effect size, increase in SE%.
+
+* WASO
+
+```{r}
+cohen.d(as.numeric(group2$WASO), as.numeric(dataSD_pre$WASO))
+```
+There is a negligible decrease in WASO within CBTi.
+
+* SOL
+
+```{r}
+cohen.d(as.numeric(group2$SOL), as.numeric(dataSD_pre$SOL))
+```
+There is a medium decrease in SOL within CBTi.
+
+*NumAwake
+
+```{r}
+cohen.d(as.numeric(group2$NumAw), as.numeric(dataSD_pre$NumAw))
+```
+There is a negligible decrease in number of awakenings within CBTi.
+
+# Previous literature
+
+Based on the van der Zweerde et al. (2018) study (online intervention iSleep VS no treatment (sleep diary monitoring only)):
+
+* TST: no significant change between CBTi and WL. But still both group show improvement.
+
+* SE%: CBTI showed significant improvement from pre to post. Moderate increase in participants just doing the diary. But less than with the intervention.
+
+# Simulation
+
+1. We will create an unbalanced design = data will be irregular for the control group as well as for the dCBTi.
+
+2. use PearsonDS package that uses the available density to draw data from it.
+
+```{r}
+library(PearsonDS) #requires package gsl
+set.seed(12345)
+```
+## Simulating TST
+
+Overall TST mean in the intervention group is 444, already higher compared to the pre-mean of 404.4. So we will use the mean of pre treatment and simulate using this mean with the change based on the literature: 20min increase. This way the mean in the Control group will be slightly lower.
+
+USE: mean - pre-treatment+20min
+
+```{r}
+#estimate mean, skewness, kurtosis and variance on the data that is available
+moments_tst = empMoments(dataSD_ordered$TST)
+##simulated data
+tst_control_sim2 = rpearson(1000,  moments=
+                           c(mean=(dataSD_pre_stat[1,1] + 20), #Pre TST mean + 20 (zweerde)
+                             variance=moments_tst[2], 
+                             skewness=moments_tst[3],
+                             kurtosis=moments_tst[4]))
+mean(tst_control_sim2)
+```
+
+```{r}
+plot(density(tst_control_sim2), ylim = c(0,0.01))
+lines(density(dataSD_ordered$TST), col = "red")
+```
+
+Since the simulation is for continuous variables there will also be outliers, so we leave the values within 100 and 650.
+
+Final TST:
+
+```{r}
+hist(tst_control_sim2, xlim = c(100,650))
+tst_control_sim = tst_control_sim2[tst_control_sim2>100 &tst_control_sim2<650] #cut off
+```
+
+## Simulate SE% 
+
+CBTi: Pre SE = 87%, Post SE = 94% (overall = 87) -> already shows expected improvement.  
+
+To artificially make the change between control and CBTi significant and at least moderate we have to lower the mean of the post measurements of the control and make the deviation around it smaller. Using can der Zweerde results mean(sd):  76.13 (1.58). However, the deviation was small for both cbti and control, and in our case to make the SE% comparable between the groups we will use the overall SD of SE% = 8.3. We will compare both distributions that we obtain
+
+
+
+
+```{r}
+moments_se = empMoments(as.numeric(dataSD_ordered$SE))
+se_control_sim = rpearson(
+  1000,
+  moments = c(
+    mean = 76.13, #using Zweerde mean
+    variance = 1.58^2, #using zweerde sd
+    skewness = moments_se[3],
+    kurtosis = moments_se[4]
+  )
+)
+
+se_control_sim2 = rpearson(
+  1000,
+  moments = c(
+    mean = 76.13, #using Zweerde mean
+    variance = 8.3^2, #using overall sd
+    skewness = moments_se[3],
+    kurtosis = moments_se[4]
+  )
+)
+```
+
+
+```{r}
+par(mfrow=c(1,3))
+plot(density(se_control_sim), ylim = c(0,0.5), xlim = c(0,100))
+plot(density(se_control_sim2), ylim = c(0,0.15), xlim = c(0,100))
+#SE real, without outliers
+plot(density(as.numeric(dataSD_ordered$SE)), ylim = c(0,0.1), xlim = c(0,100))
+
+```
+
+As we can see, the density using only van der Zweerde results is too narrow, therefore the final SE% will be based on mean = van der Zweerde and sd = what we have with observed data.
+
+Final SE%:
+
+```{r}
+se_control_sim  = se_control_sim2[se_control_sim2<=100 & se_control_sim2>10]
+hist(se_control_sim)
+```
+
+## Simulating Number of awakenings (NA) 
+
+```{r}
+barplot(table(dataSD_ordered$NumAw))
+```
+
+```{r}
+mean(dataSD_ordered$NumAw)
+var(dataSD_ordered$NumAw)
+```
+
+We are dealing with overdispersion (variance larger than the mean, which is expected in Poisson). Negative binomial distribution is preferred with more 0s. Therefore, first simulate a series of ones and zeros from a binomial distribution. The probability is set to 0.9, which implies that about 0.1 of the data will be zeros. We then simulate data from a negative binomial distribution based on the binomial distribution. If the original data was 0 from the binomial distribution, it remains a 0. Otherwise we sample from a negative binomial distrbution, which could also be a 0.
+Idea is courtesy of https://data.library.virginia.edu/simulating-data-for-count-models/ 
+
+```{r}
+set.seed(12345)
+
+z = rbinom(n = 1000, size = 1, prob = 0.9)  #about 0.1 of the data will be zeros
+
+num_aw_sim = ifelse(z == 0, 0, 
+                rnbinom(n = 1000, 
+                        mu = 0.52, 
+                        size = 1))
+#num_aw_sim =  rpois(n = 1000, lambda = 0.52) #simple way, also possible
+barplot(table(num_aw_sim), col =  "cornflowerblue")
+mean(num_aw_sim)
+```
+
+
+## Simulating WASO and SOL
+
+Both of the variables answer the question: How many minutes have you spent...
+The sleep diary format puts the ranges in the quarters of an hour: 0,15,30,45 minutes... So the 0s in this case (as well as for Numbers of awakengings) have an actual meaning. Both values are "zero-inflated" with so-called true zeros (that have a meaning within the current study design = insomniacs did spend 0 minutes in bed). These types of continuous variables are called semi-continuous. However, since the design of the experiment results in them being in equal intervals of 15 minutes we could also threat the outcomes as counts. So that the answers that we get is for the question: How many 15 minute intervals have you spent...?
+
+### WASO
+
+```{r}
+barplot(table(dataSD_ordered$WASO))
+```
+
+If we treat WASO as continuous we get the following characteristics:
+
+```{r, include=FALSE}
+mean(dataSD_ordered$WASO)
+var(dataSD_ordered$WASO) #sd = 23.8
+```
+
+We can recode the outcomes into counts: 0-0min, 1-15min, 2-30min, 3-45min and etc. 
+
+```{r}
+k = 16
+interval = seq(0,15*k, 15) #15*16 = 240min or 4 hours, can be made larger by changing the k = 16 number 
+recoded = seq(0,k,1) #corresponding values for the recoding, must match the k
+
+#match finds indeces of the "interval" that match the WASO/SOL data 
+#them subsets the values from recoded
+dataSD_ordered$WASO_rec = recoded[match(dataSD_ordered$WASO,interval)]
+dataSD_ordered$SOL_rec =  recoded[match(dataSD_ordered$SOL,interval)]
+```
+
+
+```{r}
+par(mfrow = c(1,2))
+barplot(table(dataSD_ordered$WASO),ylim = c(0,80),col =  "cornflowerblue")
+barplot(table(dataSD_ordered$WASO_rec),ylim = c(0,80),  col =  "cornflowerblue")
+```
+```{r}
+mean(dataSD_ordered$WASO_rec)
+var(dataSD_ordered$WASO_rec)
+```
+Compare to the Poisson distribution with this mean:
+
+```{r}
+barplot(table(rpois(1000,0.9)),  col =  "cornflowerblue")
+```
+ 
+ There is a clear overdispersion and the draw from Poisson is not comparable to the real one: we lose 0s. Similarly to the Number of Awake we simulate using negative binomial and binomial distributions:
+
+```{r}
+z = rbinom(n = 1000, size = 1, prob = 0.8)  #about 0.2 of the data will be zeros
+
+waso_sim = ifelse(z == 0, 0, 
+                rnbinom(n = 1000, 
+                        mu = 0.94, 
+                        size = 1))
+barplot(table(waso_sim),  col =  "cornflowerblue")
+mean(waso_sim)
+```
+
+The fit is better now.
+
+### SOL
+
+```{r}
+par(mfrow = c(1,2))
+barplot(table(dataSD_ordered$SOL), col = "cornflowerblue")
+barplot(table(dataSD_ordered$SOL_rec))
+mean(dataSD_ordered$SOL_rec)
+```
+
+Worth noting is that there is a small peak around 60min, but with more data available in the future study it will either disappear or will illustrate a clear bimodal relationship (rarely happens, but other models would have to be used). For now, we simulate SOL from neg.binomial:
+
+```{r}
+z = rbinom(n = 1000, size = 1, prob = 0.8)  #about 0.2 of the data will be zeros
+
+sol_sim = ifelse(z == 0, 0, 
+                rnbinom(n = 1000, 
+                        mu = 0.79, 
+                        size = 1))
+barplot(table(sol_sim))
+mean(sol_sim)
+```
+
+## Add observations based on the simulations
+
+```{r}
+dataSD_pre$TST = round(as.numeric(dataSD_pre$TST), 0)
+dataSD_pre$SE = round(as.numeric(dataSD_pre$SE), 0)
+#also recode WASO and SOL
+dataSD_pre$WASO_rec = recoded[match(dataSD_pre$WASO, interval)] 
+dataSD_pre$SOL_rec= recoded[match(dataSD_pre$SOL,interval)] 
+#select needed variables
+dataSD_pre=dataSD_pre %>% select(user_id, TST, SE, Entry, NumAw, WASO_rec, SOL_rec)
+#split in lists for each user_id
+out = split(dataSD_pre , f = dataSD_pre$user_id)
+```
+
+
+```{r}
+library(tidyverse) #add_row
+set.seed(12345)
+
+##add observatios of the control data##
+
+simulate_control = function (data,
+                             tst_control_sim. = tst_control_sim,
+                             se_control_sim. = se_control_sim,
+                             num_aw_sim. =  num_aw_sim,
+                             waso_sim. = waso_sim,
+                             sol_sim. = sol_sim
+                             ) {
+  #parameters:
+  #data - dataframe for 1 person
+  
+  personid = unique(data$user_id)
+
+  for (i in 1:42) {
+    #assume first week passed, that leaves 5 weeks of intervention + 7 post days = 42 days
+
+    data = data %>% add_row(
+      user_id = personid,
+      TST = sample(tst_control_sim., 1),
+      SE = sample(se_control_sim., 1),
+      Entry = NA,
+      NumAw = sample(num_aw_sim., 1),
+      WASO_rec = sample(waso_sim., 1),
+      SOL_rec = sample(sol_sim., 1)
+    )
+  }
+  return(as_tibble(data))
+}
+
+result_controlSD = lapply(out, simulate_control)
+
+#######Finction to add Entry to the data#########
+
+fix_entry = function(data) {
+  for (i in 1:nrow(data)) {
+    
+    if (is.na(data[i, "Entry"]) != TRUE) {
+      next
+    }
+    
+    data[i,"Entry"] = data[i-1, "Entry"] + 1
+  }
+  return(as_tibble(data))
+
+  
+  
+}
+
+result_controlSD2 = lapply(result_controlSD, fix_entry)
+
+##########
+#Function that deletes the observations at random and makes the control data unbalanced
+##########
+skip_random = function(data) {
+  entry_to_keep = c(0:7) #keep first 7 entries, so true pre data
+  rows_to_keep = c(1) #keep the true Pre data, 1st obs
+  skip = 0.7
+  for (i in 2:nrow(data)) {
+    p_skip = runif(1, min= 0, max=0.9)  #within 0-1
+    #leave the data if it;s in the entry to keep = true pre data
+    if (p_skip > skip | (data[i,"Entry"] %in% entry_to_keep))  rows_to_keep = append(rows_to_keep, i) 
+    #add the row that is "kept" to the rows_to_keep i
+  }
+  data = data[rows_to_keep,]
+  return(as_tibble(data))
+}
+
+final = lapply(result_controlSD2, skip_random)
+
+#full control for later
+result_controlSD2 = bind_rows(result_controlSD2)
+
+final_all = bind_rows(final)
+final_all = final_all %>% mutate(group = 0)
+
+
+head(final_all, 10)
+```
+Create the full sleep diary data frame: 
+
+```{r}
+sleep_diary = rbind(final_all, dataSD_ordered[,c(1:5, 8:10)])
+sleep_diary$TST = round(as.numeric(sleep_diary$TST), 0)
+sleep_diary$SE = round(as.numeric(sleep_diary$SE), 0)
+```
+
+Save as csv file next to use for the models if needed. Example code:
+
+```{r}
+#write.csv(sleep_diary,"C:\\full_sleepdiary.csv", row.names = FALSE)
+```

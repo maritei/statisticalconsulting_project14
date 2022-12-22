@@ -1,0 +1,1042 @@
+---
+title: "Sleep Diary Analysis"
+author: "Olena Zaitseva , Jonna Teinonen "
+date: "27 10 2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Download simulated data:
+
+```{r}
+sleep_diary = read.csv(file = "full_sleepdiary.csv")
+```
+
+
+
+```{r}
+library(rcompanion) #inspecting normality
+library(nlme)
+library(lmerTest)
+library(car) #lowess
+
+library(lattice) #plots
+library(ggeffects) 
+library(ggplot2)
+```
+
+# Applying LMM to TST and SE%
+
+First, fix the data types:
+
+* group - factor with 2 levels: control and dCBTi.
+* Here Entry == Time is continuous, could also be used as a factor (e.g. week 1, week 2...).
+* SE, TST -> numeric variables, no change.
+* Subjects as factors (user_id).
+
+```{r}
+sleep_diary$group = factor(sleep_diary$group, levels=c(0,1),
+  labels=c('Control','CBTi'))
+
+sleep_diary$Entry = as.numeric(sleep_diary$Entry)
+
+sleep_diary$SE = as.numeric(sleep_diary$SE)
+
+sleep_diary$TST = as.numeric(sleep_diary$TST)
+
+#subjects are factors
+sleep_diary$user_id = as.factor(sleep_diary$user_id)
+
+```
+
+
+## LMM, TST
+
+### Explore the TST data
+
+* Is it normal?
+
+```{r}
+plotNormalHistogram(sleep_diary$TST)
+```
+
+Good enough comparing the distribution to the blue normal density,i.e. LMM can be applied. However, it is still slightly skewed which would influence the residuals to some extent. We can transform TST into hours because the appropriate transformation is the power one  =>using TST as minutes will result in large numbers. Then, apply a transformation (the fitting one is approximately (TST/60)^2)).
+
+* Plot observed and simulated TST data
+
+```{r}
+tst_start = ggplot(data = sleep_diary, aes(x=Entry,y=TST))+
+  facet_wrap(~user_id)+
+  geom_point(aes(color=group), lwd = 1)+
+  geom_smooth(method='lm', se=FALSE,aes(color=group), lwd=0.5)+
+  xlab("Time")+ylab("TST")+
+  theme_bw()+
+  theme(legend.position = "top")
+tst_start
+```
+
+We see unequal number of observations, a lot of missing data, but the trends in increase/decrease are already seen.  
+
+### Note on the correlation structure and testing the fit
+
+**Correlation structure**
+
+Depending on the whether we have discrete or continuous time points, equally or unequally spaced observations, various correlation structures may fit.
+
+To provide an example over the whole sleep diary we must treat time as continuous. This leads to:  
+
+The AR1 structure specifies that the correlations between the repeated measurements of each subject decrease with the time lag, i.e., the distance in time between the measurements. We use *continuous AR1 structure*.  
+
+* Why not regular AR1?  
+
+1) unequal intervals <=> missing data
+2) continuous time (a lot time points), not discrete (week 1, week 2...).  
+
+* What CAR1 does?  
+
+The rho (defines correlation) from the traditional AR1 structure is adjusted for the time interval between two subsequent measurements, the correlation decreases with time as in the AR1.
+
+Logic of AR1 (note: time as factor, so Pre vs Post or week1, 2, 3... ) and cAR1 (is poissble only in lme()):  
+
+* (form = ~ 1 | id)) - assumes that the measurements are equally spaced for all individuals defined with id. 
+
+* (form = ~ time | id) - use the time variable time to determine how far apart the measurements are, and define the time lag, plus the grouping variable id.
+
+* (form = ~time) - also possible in case of equally spaced observations.
+
+Data between different individuals are uncorrelated.
+
+**Comparing fit**
+
+To compare* the fit of the 2 correlation structures/models using Anova: 1. models have to be fitted with ML instead of REML and 2. nested within each other: the more complicated model adds something to the simple model whether random effects, fixed or a different correlation structrue. 
+
+Important note: it is also recommended to first fit using gls (nlme::), i.e. a model without random effects but with a certain correlation structure, to compare which structure is better. However anova only suits for nested models (fixed/random effects or correlation structures), for non-nested structures compare AIC and BIC (lower is preferred). There will be an example later.
+
+For the sake of providing an example of the correlation structure, we are going to use the CAR1 correlation in the following models.
+
+### Random intercepts model, CAR1, TST
+
+First, we fit the random intercepts model: the effect of treatment on TST is assumed to be the same across all participants. This assumption can be relaxed by fitting a random slope model (next part). The error structure is Continuous AR1, which works for highly unbalanced data collected at different occasions per subject.  
+
+```{r}
+# Fitting the model
+LMM_TST_ri_car <- lme(TST ~ group + Entry +  group*Entry,
+               random = ~1|user_id,
+               method = "REML" , correlation = corCAR1(form = ~Entry|user_id),
+               data = sleep_diary)
+
+```
+
+
+```{r}
+# Results of LMM 
+summary(LMM_TST_ri_car)
+```
+
+Checking assumptions:
+
+```{r}
+
+par(mfrow=c(2,2))
+
+### Equal Variance Assumption ###
+
+## Plot residuals vs. fitted values: should be approximately equally distributed around 0
+
+## 1. Raw Residuals vs. Fitted values
+plot(resid(LMM_TST_ri_car, type = "response") ~ fitted(LMM_TST_ri_car),
+    main = "Raw Residuals vs. Fitted Values",
+     ylab = "RaW Residuals",
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_TST_ri_car), resid(LMM_TST_ri_car, type = "response")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 2. Pearson Residuals vs. Fitted values
+plot(resid(LMM_TST_ri_car, type = "pearson") ~ fitted(LMM_TST_ri_car),
+    main = "Pearson Residuals vs. Fitted Values",
+     ylab = "Pearson Residuals",
+     
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_TST_ri_car), resid(LMM_TST_ri_car, type = "pearson")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 3. Standardized Residuals vs. Fitted values
+plot(resid(LMM_TST_ri_car, scaled = T) ~ fitted(LMM_TST_ri_car),
+    main = "Standardized Residuals vs. Fitted Values",
+     ylab = "Standardized Residuals",
+    
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_TST_ri_car), resid(LMM_TST_ri_car, scaled = T)), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+
+
+### Normally Distributed Residuals Assumption ###
+
+## 1. QQ-plot of the standardized residuals
+qqPlot(resid(LMM_TST_ri_car, scaled = T),
+       main = "Standardized residuals vs. Quantiles",
+       ylab = "Standardized Residuals", 
+       xlab = "Quantiles",
+       pch = 19,
+       col = "cornflowerblue",
+       grid = F,
+       id = F,
+       envelope = list(style = "lines"))
+
+
+## 2. Histogram of the standardized residuals
+hist(resid(LMM_TST_ri_car, scaled = T),
+     density = 30, col = "black",
+     main = "Distribution of the Standardized Residuals",
+     xlab = "Standardized Residuals",
+     prob = T)
+curve(dnorm(x, mean = mean(resid(LMM_TST_ri_car, scaled = T)), 
+            sd = sd(resid(LMM_TST_ri_car, scaled = T))),
+      col = "blue", lwd = 2, add = T, yaxt="n")
+
+
+```
+
+The residuals are normal (qqplot, histogram). And are approximately distributed around mean = 0 (first 3 plots).
+
+If we apply the transformation for the models it would improve the assumptions, but hinder the interpretation, therefore for this model we're leaving the unchanged TST.
+
+### Random intercepts and slopes model, CAR1, TST
+
+Similarly, we allow for the slope to change for each individual.
+
+```{r}
+LMM_TST_ris_car = lme(TST ~ group + Entry +  group*Entry,
+               random = ~Entry|user_id,
+               method = "REML", correlation = corCAR1(form = ~Entry|user_id),
+               data = sleep_diary)
+
+```
+
+
+```{r}
+summary(LMM_TST_ris_car)
+```
+
+```{r}
+
+par(mfrow=c(2,2))
+
+### Equal Variance Assumption ###
+
+## Plot residuals vs. fitted values: should be approximately equally distributed around 0 on Y
+
+#standardized residuals  vs fitted per group, time
+#plot(LMM_TST_ri_car, resid(.)~fitted(.)|group)
+
+
+## 1. Raw Residuals vs. Fitted values
+plot(resid(LMM_TST_ris_car, type = "response") ~ fitted(LMM_TST_ris_car),
+    main = "Raw Residuals vs. Fitted Values",
+     ylab = "RaW Residuals",
+     #ylim = c(-6, 6),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_TST_ris_car), resid(LMM_TST_ris_car, type = "response")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 2. Pearson Residuals vs. Fitted values
+plot(resid(LMM_TST_ris_car, type = "pearson") ~ fitted(LMM_TST_ris_car),
+    main = "Pearson Residuals vs. Fitted Values",
+     ylab = "Pearson Residuals",
+     
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_TST_ris_car), resid(LMM_TST_ris_car, type = "pearson")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 3. Standardized Residuals vs. Fitted values
+plot(resid(LMM_TST_ris_car, scaled = T) ~ fitted(LMM_TST_ris_car),
+    main = "Standardized Residuals vs. Fitted Values",
+     ylab = "Standardized Residuals",
+    
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_TST_ris_car), resid(LMM_TST_ris_car, scaled = T)), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+
+
+### Normally Distributed Residuals Assumption ###
+
+## 1. QQ-plot of the standardized residuals
+qqPlot(resid(LMM_TST_ris_car, scaled = T),
+       main = "Standardized residuals vs. Quantiles",
+       ylab = "Standardized Residuals", 
+       xlab = "Quantiles",
+       pch = 19,
+       col = "cornflowerblue",
+       grid = F,
+       id = F,
+       envelope = list(style = "lines"))
+
+
+## 2. Histogram of the standardized residuals
+hist(resid(LMM_TST_ris_car, scaled = T),
+     density = 30, col = "black",
+     main = "Distribution of the Standardized Residuals",
+     xlab = "Standardized Residuals",
+     prob = T)
+curve(dnorm(x, mean = mean(resid(LMM_TST_ris_car, scaled = T)), 
+            sd = sd(resid(LMM_TST_ris_car, scaled = T))),
+      col = "blue", lwd = 2, add = T, yaxt="n")
+
+
+
+```
+
+While the residuals are still normal, but they are clearly not so equally distributed around 0. 
+
+### Plot the TST models 
+
+Marginal means:
+
+```{r}
+plot(ggpredict(LMM_TST_ri_car, c("Entry","group")))
+plot(ggpredict(LMM_TST_ris_car, c("Entry","group")))
+```
+
+Next, plot for specific users -> uses full fitted values (marginal) plus random effects for each user:
+
+```{r}
+#predict() -> computes the values
+df = cbind(sleep_diary, data.frame(predicted_ri = predict(LMM_TST_ri_car), predicted_ris = predict(LMM_TST_ris_car)))
+```
+
+
+For example, predicted values for both groups at different time points for the random intercepts model: 
+
+```{r}
+ggplot(data = df)+
+  facet_wrap(~user_id)+
+  geom_point(aes(x=Entry,y=TST,color=group), shape=1)+
+  geom_line(aes(x=Entry,y=predicted_ri, color=group))+
+  xlab("Time")+ylab("TST")+
+  theme(legend.position = "top")
+```
+
+Simulated control:
+
+```{r}
+xyplot(TST + predicted_ri + predicted_ris ~ Entry | user_id, data =  subset(df, group == "Control"), type = c("l"), ylab = "TST", layout = c(3, 3),
+       auto.key = list(text = c("observed", "predicted by model RI", "predicted by model RIS"), points = FALSE, lines = TRUE))
+```
+
+Treatment group:
+
+```{r}
+xyplot(TST + predicted_ri + predicted_ris ~ Entry | user_id, data = subset(df, group == "CBTi"), type = "l", ylab = "TST", layout = c(3, 3),
+       auto.key = list(text = c("observed", "predicted by model 1", "predicted by model 2"), points = FALSE, lines = TRUE))
+```
+
+We see no difference between the RI and RIS models, but we can also check using a formal LRT test.
+
+#### Compare fit of TST models
+
+Compare the random intercepts model (RI) to the random intercepts and slopes (RIS) model for each participants -> the RI model is nested within RIS, while everything else is the same therefore we can use Anova:
+
+Anova on Models fitted with REML (incorrect)!
+```{r}
+anova(LMM_TST_ri_car, LMM_TST_ris_car)
+```
+Models fitted with ML (use optimiser to avoid convergence issues):
+
+```{r}
+m1 = update(LMM_TST_ri_car, method = "ML")
+m2 = update(LMM_TST_ris_car, method = "ML", control=list(msMaxIter=100,opt = "optim",msVerbose=TRUE))
+anova(m1, m2)
+```
+P value is 0.58 thus the difference between the models is insignificant  => simpler model is better => use random intercepts model. The slope does not matter.
+
+However!
+
+In Anova the p value may be too conservative and the simpler model would be chosen.
+
+The asymptotic null distribution of the standard LRT is not a chi-squared distribution with 2 df, but in general when testing q versus q+1 random effect it's a mixture of 2 chi-square distributions: one with df of q one with q+1 df.  
+So here a mixture of chi-squared distribution with df = 1 (only random intercept) + df= 2 (intercept and slope) parameters. 
+
+```{r}
+chi_mix1  = function(q) 0.5*pchisq(q, 2,lower.tail = F) + 0.5*pchisq(q, 1,lower.tail = F)
+chi_mix2 = function(q) pchisq(q, 2, lower.tail = F) #regular 
+
+LRT_stat = 2*(m2$logLik - m1$logLik) 
+
+chi_mix2(LRT_stat) #regular
+
+chi_mix1(LRT_stat) #mixture
+```
+We still prefer the random intercepts model, since the p value is large (0.44). In most cases, anova() is enought but at morderline cases it might be better to use the mixture.
+
+# LMM on SE%
+
+## Check the SE distribution
+
+```{r}
+plotNormalHistogram(sleep_diary$SE)
+```
+
+SE% is heavily skewed to the left. Therefore we need to apply appropriate transformations.
+
+* Current SE data
+
+```{r}
+se_start = ggplot(data = sleep_diary, aes(x=Entry,y=SE))+
+  facet_wrap(~user_id)+
+  geom_point(aes(color=group), size = 1, shape=1)+
+  geom_smooth(method='lm', se=FALSE, aes(color=group), size=0.5)+
+  xlab("Time")+ylab("SE")+
+  theme_bw()+
+  theme(legend.position = "top")
+se_start
+```
+
+In some observations there is a trend for improvement. The decrease effect in the Control group is due to the simulating on the much lower mean.
+
+Since the distributions is skewed we transform the SE%: 
+
+```{r}
+transformTukey(sleep_diary$SE, plotit = FALSE)
+#lambda is approx. 3 -> transformation is x^lambda = x^2.825
+```
+Since it's a power transformation at 2.825, it will result in very large transformed SE (e.g. 99%^3 = 970.3). So we divide by 100 since it's a percentage and then transform. For easier interpretation of the results we will transform with the power = 3.
+
+```{r}
+sleep_diary$se_trans = round((sleep_diary$SE/100)^3, 2)
+plotNormalHistogram(sleep_diary$se_trans)
+```
+
+As good as it gets with this kind of distribution for the LMM.  
+The process of fitting the models is the same as for the TST.
+
+## LMM, SE%, random intercepts
+
+```{r}
+# Fitting the model
+LMM_SE_ri<- lme(se_trans ~ group + Entry +  group*Entry,
+              random = ~1|user_id,
+               method = "REML",
+              correlation = corCAR1(form = ~Entry|user_id),
+               data = sleep_diary)
+
+# Results of LMM 
+summary(LMM_SE_ri)
+```
+```{r}
+
+par(mfrow=c(2,2))
+
+### Equal Variance Assumption ###
+
+## Plot residuals vs. fitted values: should be approximately equally distributed around 0
+
+## 1. Raw Residuals vs. Fitted values
+plot(resid(LMM_SE_ri, type = "response") ~ fitted(LMM_SE_ri),
+    main = "Raw Residuals vs. Fitted Values",
+     ylab = "RaW Residuals",
+     #ylim = c(-6, 6),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_SE_ri), resid(LMM_SE_ri, type = "response")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 2. Pearson Residuals vs. Fitted values
+plot(resid(LMM_SE_ri, type = "pearson") ~ fitted(LMM_SE_ri),
+    main = "Pearson Residuals vs. Fitted Values",
+     ylab = "Pearson Residuals",
+     
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_SE_ri), resid(LMM_SE_ri, type = "pearson")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 3. Standardized Residuals vs. Fitted values
+plot(resid(LMM_SE_ri, scaled = T) ~ fitted(LMM_SE_ri),
+    main = "Standardized Residuals vs. Fitted Values",
+     ylab = "Standardized Residuals",
+    
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_SE_ri), resid(LMM_SE_ri, scaled = T)), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+
+
+### Normally Distributed Residuals Assumption ###
+
+## 1. QQ-plot of the standardized residuals
+qqPlot(resid(LMM_SE_ri, scaled = T),
+       main = "Standardized residuals vs. Quantiles",
+       ylab = "Standardized Residuals", 
+       xlab = "Quantiles",
+       pch = 19,
+       col = "cornflowerblue",
+       grid = F,
+       id = F,
+       envelope = list(style = "lines"))
+
+
+## 2. Histogram of the standardized residuals
+hist(resid(LMM_SE_ri, scaled = T),
+     density = 30, col = "black",
+     main = "Distribution of the Standardized Residuals",
+     xlab = "Standardized Residuals",
+     prob = T)
+curve(dnorm(x, mean = mean(resid(LMM_SE_ri, scaled = T)), 
+            sd = sd(resid(LMM_SE_ri, scaled = T))),
+      col = "blue", lwd = 2, add = T, yaxt="n")
+```
+
+The residuals are not that normal at the tail (due to the skew), but are more or less equally distributed. Sometimes changing the correlation structure can help, adding random effects or a different transformation.
+
+## LMM, Random intercepts and slopes SE%
+
+```{r}
+# Fitting the model
+LMM_SE_ris = lme(se_trans ~ group + Entry +  group*Entry,
+              random = ~Entry|user_id,
+               method = "REML",
+              correlation = corCAR1(form = ~Entry|user_id),
+               data = sleep_diary)
+
+# Results of LMM 
+summary(LMM_SE_ris)
+```
+
+```{r}
+
+par(mfrow=c(2,2))
+
+### Equal Variance Assumption ###
+
+## Plot residuals vs. fitted values: should be approximately equally distributed around 0
+
+## 1. Raw Residuals vs. Fitted values
+plot(resid(LMM_SE_ris, type = "response") ~ fitted(LMM_SE_ris),
+    main = "Raw Residuals vs. Fitted Values",
+     ylab = "RaW Residuals",
+     #ylim = c(-6, 6),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_SE_ris), resid(LMM_SE_ris, type = "response")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 2. Pearson Residuals vs. Fitted values
+plot(resid(LMM_SE_ris, type = "pearson") ~ fitted(LMM_SE_ris),
+    main = "Pearson Residuals vs. Fitted Values",
+     ylab = "Pearson Residuals",
+     
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_SE_ris), resid(LMM_SE_ris, type = "pearson")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 3. Standardized Residuals vs. Fitted values
+plot(resid(LMM_SE_ris, scaled = T) ~ fitted(LMM_SE_ris),
+    main = "Standardized Residuals vs. Fitted Values",
+     ylab = "Standardized Residuals",
+    
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_SE_ris), resid(LMM_SE_ris, scaled = T)), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+
+
+### Normally Distributed Residuals Assumption ###
+
+## 1. QQ-plot of the standardized residuals
+qqPlot(resid(LMM_SE_ris, scaled = T),
+       main = "Standardized residuals vs. Quantiles",
+       ylab = "Standardized Residuals", 
+       xlab = "Quantiles",
+       pch = 19,
+       col = "cornflowerblue",
+       grid = F,
+       id = F,
+       envelope = list(style = "lines"))
+
+
+## 2. Histogram of the standardized residuals
+hist(resid(LMM_SE_ris, scaled = T),
+     density = 30, col = "black",
+     main = "Distribution of the Standardized Residuals",
+     xlab = "Standardized Residuals",
+     prob = T)
+curve(dnorm(x, mean = mean(resid(LMM_SE_ris, scaled = T)), 
+            sd = sd(resid(LMM_SE_ris, scaled = T))),
+      col = "blue", lwd = 2, add = T, yaxt="n")
+```
+
+Does the dependence on days really vary across subjects or are subjects identical with respect to the dependence? Compare random intercepts to random intercepts and slopes using the anova() and our function: 
+
+```{r}
+anova( update(LMM_SE_ris, method = "ML"), update(LMM_SE_ri, method = "ML"))
+```
+
+Using the mixture of the two chi-square distribution:
+
+```{r}
+LRT_stat = 2*(update(LMM_SE_ris, method = "ML")$logLik - update(LMM_SE_ri, method = "ML")$logLik) 
+chi_mix1(LRT_stat)
+chi_mix2(LRT_stat)
+
+#chi_mix1  = function(q) 0.5*pchisq(q, 2,lower.tail = F) + 0.5*pchisq(q, 1,lower.tail = F)
+#chi_mix2 = function(q) pchisq(q, 2, lower.tail = F) #regular 
+
+
+```
+Results from the likelihood ratio test shows that at 0.05 level the random intercept model fits the data better than the random slopes-intercepts model. A mixture results in a p-value of 0.067. With more data the model with intercepts and slopes might be more appropriate.
+
+#### Plot SE% model
+
+Add predicted:
+
+```{r}
+df = cbind(df, data.frame(predicted_ris_se = predict(LMM_SE_ris), predicted_ri_se = predict(LMM_SE_ri)), se_trans = sleep_diary$se_trans)
+
+```
+
+Simulated control:
+
+```{r}
+xyplot(se_trans + predicted_ri_se + predicted_ris_se ~ Entry | factor(user_id), data =  subset(df, group == "Control"), type = c("l"), ylab = "TST", layout = c(3, 3),
+       auto.key = list(text = c("observed", "predicted by model RI", "predicted by model RIS"), points = FALSE, lines = TRUE))
+```
+
+Treatment: 
+
+```{r}
+xyplot(se_trans + predicted_ri_se + predicted_ris_se ~ Entry | factor(user_id), data =  subset(df, group == "CBTi"), type = c("l"), ylab = "TST", layout = c(3, 3),
+       auto.key = list(text = c("observed", "predicted by model RI", "predicted by model RIS"), points = FALSE, lines = TRUE))
+```
+
+### Plot predicted TST and SE%
+
+```{r}
+plot(ggpredict(LMM_SE_ris, c("Entry","group"))) + theme_gray() 
+plot(ggpredict(LMM_SE_ri, c("Entry","group"))) + theme_gray()
+```
+```{r}
+plot(ggpredict(LMM_TST_ris_car, c("Entry","group"))) + theme_gray()
+plot(ggpredict(LMM_TST_ri_car, c("Entry","group"))) + theme_gray()
+```
+
+Using these plots might be easier to see the change within/between the groups.
+
+# Fitting the models on NA, WASO and SOL 
+
+
+```{r}
+library(glmmTMB)
+#library(lme4) #lme4::glmer or glmer.nb can also be used
+```
+
+## SOL and WASO
+
+The distributions/nature of NA, WASO and SOL are not applicable for a regular LMM.
+They are counts with excess 0s. There are a couple of ways to deal with that, for more information refer to the paper. We are going to use the negative binomial model here, with no zero inflation parameter. Negative binomial specification is normally used to handle over-dispersed data. We fit a negative binomial model based on the NB1 parameterisation. [Hilbe, Joseph M. 2011. Negative Binomial Regression. Cambridge University Press. https://doi.org/10.1017/CBO9780511973420.]
+
+However, handling missing data research in these models is limited:
+https://www.researchgate.net/publication/321387949_Review_of_Zero-Inflated_Models_with_Missing_Data
+
+### SOL
+
+```{r}
+nbinom1_sol_cont = glmmTMB(SOL_rec~ group + Entry+ group*Entry +(1|user_id) ,
+                      #slopes would be (Entry|user_id)
+                    data=sleep_diary,
+                    ziformula=~0,
+                    family=nbinom1)
+summary(nbinom1_sol_cont)
+```
+
+The data is nested, containing 18 people each with different number of observations, leading to 278 observations.
+
+The results suggest an overdispertion: deviance/df_resid = 573.2 / 272 = 2.1 (should be approximately 1). Hence, the standard errors of the fixed effects are underestimated by a factor of 2 => some effects might be significant when they are not. The easier way to check whether the overdispertion is present is to just check the mean/variance ratio (should be > 1). Checking this is also one of the assumptions.
+
+We have used a log link, therefore all paramters must be exponentiated:
+
+```{r}
+confint(nbinom1_sol_cont)
+```
+
+```{r}
+exp(confint(nbinom1_sol_cont))
+```
+
+
+```{r}
+plot(ggpredict(nbinom1_sol_cont, c("Entry", "group"))) + theme_gray()
+```
+
+Interpretation example:
+
+Now the Estimate for Entry represents a one unit increase in Entry, 1->2->3...  
+Assuming that each "unit" is 1 day then for each additional day, the difference in the logs of expected number of SOL (0,1...2 = 15 min intervals) is expected to decrease by -0.02493, exponentiation (log link in the model, so the outcome is log(SOL_rec)) gives 0.779 or (1-0.779) = 0.221 which means that overall there is a (1 - 0.221)% decrease in SOL for every 1 day increase at the baseline. The baseline is day 0, Control group (usually, can be changed).
+
+The estimate for groupCBTi is the expected difference in log count between CBTi and the reference group (Control). The expected log count for treatment is 0.61 lower than the expected log count for control.
+
+Formula: SOL_recoded = exp(Intercept + beta1_[group = CBTi] + beta2_[Entry] + beta3_[CBTi]*[Entry])
+
+Example: day 30, CBTi:  = exp(-0.02053 + (-0.60672) + (-0.02493)x30 + 0.02762x30) = 0.579
+        day 30, Control = exp(-0.02053 + (-0.02493)x30) = 0.464
+
+#### Investigate assumptions
+
+Refer here for more details: https://cran.r-project.org/web/packages/DHARMa/vignettes/DHARMa.html
+https://cran.r-project.org/web/packages/glmmTMB/vignettes/model_evaluation.pdf
+
+```{r}
+library(DHARMa)
+```
+With more data for the model, it is better to refit the models n times and investigate the simulated residuals then (simulateResiduals(fittedModel=model,n=100, refit=T)). Especially considering that the sample size is very small, residuals may be perfect.  
+Here we look only at the residuals of the current model as an example:
+
+```{r}
+sol_cont_simres = simulateResiduals(fittedModel=nbinom1_sol_cont) #,n=100, refit=T
+```
+
+First check the zero inflation using a formal test.
+
+```{r}
+testZeroInflation(sol_cont_simres) 
+```
+
+If this assumption is not met: use ziformula=~1 : single zero-inflation parameter applied to all observations
+
+Next, check whether there is actually an overdispersion present.
+
+```{r}
+testDispersion(sol_cont_simres) 
+```
+
+If there is no overdispertion => for example, a Poisson model might be more appropriate. 
+
+```{r}
+plotQQunif(sol_cont_simres) # left plot in plot.DHARMa()
+plotResiduals(sol_cont_simres) # right plot in plot.DHARMa()
+```
+
+
+### WASO
+
+```{r}
+nbinom1_waso_cont = glmmTMB(WASO_rec~ group + Entry+ group*Entry +(1|user_id) ,
+                    data=sleep_diary,
+                    ziformula=~0,
+                    family=nbinom1)
+summary(nbinom1_waso_cont)
+```
+We can also check for separate random effects:
+
+```{r}
+ranef(nbinom1_waso_cont)
+```
+Exponentiate the estimates: 
+
+```{r}
+exp(confint(nbinom1_waso_cont))
+```
+Plot predicted:
+
+```{r}
+plot(ggpredict(nbinom1_waso_cont, c("Entry", "group")))+ theme_gray()
+```
+
+### NA
+
+```{r}
+nbinom1_na_cont = glmmTMB(NumAw~ group + Entry+ group*Entry +(1|user_id) ,
+                    data=sleep_diary,
+                    ziformula=~0,
+                    family=nbinom1)
+summary(nbinom1_na_cont)
+```
+
+```{r}
+exp(confint(nbinom1_na_cont))
+```
+
+
+```{r}
+plot(ggpredict(nbinom1_na_cont, c("Entry", "group"))) + theme_gray()
+```
+
+
+# Between Cohen's d 
+
+## Cohen's d over observed data for TST and SE% using Morris, 2007/8: formula dppc2
+
+```{r}
+cohend_morris_dppc2 = function(post_t, pre_t, post_c, pre_c) {
+  #order: post treatment, pre treatment, post control, pre control
+  
+  #calculate cp
+  nT = as.numeric(length(post_t)) + as.numeric(length(pre_t))
+
+  nC = as.numeric(length(pre_c)) + as.numeric(length(post_c))
+
+  c_p = 1 - 3/(4*(nT+nC-2)-1)
+
+  #calculate pooled SD at the baseline for treatment and control: SDpre
+  ##requires SDpre.T, SDpre.C
+  SD_pre_T = sd(as.numeric(pre_t))
+  SD_pre_C = sd(as.numeric(pre_c))
+  SD_pre_pooled = sqrt(((nT-1)*SD_pre_T^2 + (nC-1)*SD_pre_C^2)/(nT+nC-2))
+
+  ##final d
+  d_morris = c_p*((mean(post_t) - mean(pre_t))-(mean(post_c)-mean(pre_c)))/SD_pre_pooled
+
+  return(d_morris)
+}
+```
+
+
+```{r}
+#################
+#Subset data
+################
+
+#here we consider week 0 as a pre, and everything after is post
+#this can be changed 
+
+#group1 = post treatment
+group1 = subset(sleep_diary,  group == "CBTi" & Entry > 7)
+
+#group2 = pre treatment
+group2 = subset(sleep_diary,  group == "CBTi" & Entry<=7)
+
+
+#group 3 = post control
+group3 = subset(sleep_diary,  group == "Control" & Entry>7)
+
+#group 4 = pre control
+group4 = subset(sleep_diary,  group == "Control" & Entry<=7)
+
+# order post treatment, pre treat., post control, pre control
+tst_d2 = cohend_morris_dppc2(group1$TST, group2$TST, group3$TST, group4$TST)
+
+tst_d2
+
+```
+
+```{r}
+#Pre control
+mean(group4$TST)
+sd(group4$TST)
+#Post control
+mean(group3$TST)
+sd(group3$TST)
+#Post treat
+mean(group1$TST)
+sd(group1$TST)
+#pre post
+mean(group2$TST)
+sd(group2$TST)
+```
+```{r}
+mean(group4$SE)
+sd(group4$SE)
+mean(group3$SE)
+sd(group3$SE)
+#Post treat
+mean(group1$SE)
+sd(group1$SE)
+#pre post
+mean(group2$SE)
+sd(group2$SE)
+```
+
+```{r}
+se_d2 = cohend_morris_dppc2(group1$SE, group2$SE, group3$SE, group4$SE)
+se_d2
+```
+
+NA:
+
+```{r}
+#Pre control
+mean(group4$NumAw)
+sd(group4$NumAw)
+#post control
+mean(group3$NumAw)
+sd(group3$NumAw)
+#Post treat
+mean(group1$NumAw)
+sd(group1$NumAw)
+#pre post
+mean(group2$NumAw)
+sd(group2$NumAw)
+
+```
+
+```{r}
+na_d2 = cohend_morris_dppc2(group1$NumAw, group2$NumAw, group3$NumAw, group4$NumAw)
+na_d2
+```
+
+
+WASO:
+
+```{r}
+#Pre control
+mean(group4$WASO_rec)
+sd(group4$WASO_rec)
+#Post control
+mean(group3$WASO_rec)
+sd(group3$WASO_rec)
+#Post treat
+mean(group1$WASO_rec)
+sd(group1$WASO_rec)
+#pre post
+mean(group2$WASO_rec)
+sd(group2$WASO_rec)
+
+```
+
+```{r}
+waso_d2 = cohend_morris_dppc2(group1$WASO_rec, group2$WASO_rec, group3$WASO_rec, group4$WASO_rec)
+waso_d2
+```
+
+SOL:
+
+```{r}
+#Pre control
+mean(group4$SOL_rec)
+sd(group4$SOL_rec)
+#Post control
+mean(group3$SOL_rec)
+sd(group3$SOL_rec)
+
+#pre post
+mean(group2$SOL_rec)
+sd(group2$SOL_rec)
+#Post treat
+mean(group1$SOL_rec)
+sd(group1$SOL_rec)
+
+sol_d2 = cohend_morris_dppc2(group1$SOL_rec, group2$SOL_rec, group3$SOL_rec, group4$SOL_rec)
+sol_d2
+
+```
+
+# Within Cohen's d
+
+```{r}
+library(effsize)
+```
+
+
+## TST
+
+Within treatment:
+
+
+```{r}
+cohen.d(group1$TST, group2$TST)
+```
+
+Within control:
+
+```{r}
+cohen.d(group3$TST, group4$TST)
+```
+
+
+## SE%
+
+Within treatment:
+```{r}
+# SE
+cohen.d(group1$SE, group2$SE)
+```
+Within control:
+
+```{r}
+cohen.d(group3$SE, group4$SE)
+```
+
+Difference for SE% withing control is large due to the artificial decrease for the post control results.
+
+## NA
+
+Within treatment:
+
+
+```{r}
+cohen.d(group1$NumAw, group2$NumAw)
+```
+
+Within control:
+
+```{r}
+cohen.d(group3$NumAw, group4$NumAw)
+```
+
+
+## WASO
+
+Within treatment:
+
+
+```{r}
+cohen.d(group1$WASO_rec, group2$WASO_rec)
+```
+
+
+Within control:
+
+```{r}
+cohen.d(group3$WASO_rec, group4$WASO_rec)
+```
+
+## SOL
+
+Within treatment:
+
+```{r}
+cohen.d(group1$SOL_rec, group2$SOL_rec)
+```
+ 
+Within control:
+
+```{r}
+cohen.d(group3$SOL_rec, group4$SOL_rec)
+```
