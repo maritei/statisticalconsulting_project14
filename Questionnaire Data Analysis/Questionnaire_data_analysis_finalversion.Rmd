@@ -1,0 +1,2819 @@
+---
+title: "Questionnaire_Analysis_new_simulation"
+author: "Jonna Teinonen"
+date: "11/5/2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: "Questionnaire Data Analysis"
+author: "Jonna Teinonen and Helen Zaitseva"
+date: "10/14/2022"
+output: html_document
+---
+
+# 1. Downloading the data
+
+```{r}
+library("readxl")
+
+# Downloading data including questionnaire pre-results
+dataQ <- read_excel("pretest_data_questionnaires_updated.xlsx")
+# dataQ <- as.data.frame(dataQ)
+
+# Downloading data including questionnaire post-results
+dataQ_post <-  read_excel("posttest_data_questionnaires.xlsx")
+
+# Replace all "-99" values with NA
+dataQ[dataQ == -99] <- NA
+
+
+```
+
+R gives errors about the date variables so the format needs to be checked so that
+right variables are calculated. 
+
+
+
+# 2. Data Preprocessing
+
+## 2.1 Examining Missing Data
+
+
+
+```{r}
+# Analysing the missingness in each questionnaire variable
+library(mice)
+
+missing_ISI <- md.pattern(dataQ[, 81:87], plot = T)
+missing_ISI 
+
+missing_PHQ <- md.pattern(dataQ[, 46:54], plot = T)
+missing_PHQ
+
+missing_GAD <- md.pattern(dataQ[, 56:62], plot = T)
+missing_GAD
+
+missing_WAS <- md.pattern(dataQ[, 64:68], plot = T)
+missing_WAS
+
+missing_MHQol <- md.pattern(dataQ[, 69:76], plot = T)
+missing_MHQol
+
+missing_MHQol <- md.pattern(dataQ[, 69:76], plot = T)
+missing_MHQol
+
+missing_mctq <- md.pattern(dataQ[, 6:45], plot = T)
+missing_mctq
+
+```
+
+For all questionnaire variables (except ISI), we need to remove 4 participants
+as they are missing answers for all these questionnaires.
+
+In addition in MTCQ, if we want to calculate outcome variables  "Average week sleep duration (SDWeek)"
+and "Weekly Sleep loss (SLossWeek)" we need to use multiple imputation to 
+estimate the number of work days / free days as 12  participant are missing these values. 
+
+
+
+## 2.2 Multiple Imputation
+
+As most participants are missing data for the MCTQ variable WD (and therefore we
+cannot compute SDweek and SLossWeek for these participants), multiple imputation
+is used to estimate WD for these participants. Predictive mean matching (method = "pmm")
+was repeated 100 times with 25 iterations. 
+
+
+
+
+```{r}
+library(mice)
+
+# Multiple imputation with 100 imputations and 20 iterations
+data_imp <- dataQ[, c(7, 88:90)]
+imp_data <- mice(data = data_imp, 
+                 m = 100,
+                 method = "pmm",
+                 maxit = 25,
+                 seed = 123)
+  
+```
+We can create a density plot of the imputations.
+
+```{r}
+densityplot(imp_data,
+            main = "Density of Imputed Datasets (m = 100)",
+            xlab = "Number of workdays per Week",
+            thicker = 6)
+
+
+```
+
+```{r}
+# After imputation, we return the complete dataset with the imputed values
+completedData <- complete(imp_data, 1)
+```
+
+
+
+```{r}
+# We include the complete dataset with the imputed values to original dataset
+dataQ$mctq_studie_werk_dagenperweek <- completedData$mctq_studie_werk_dagenperweek
+
+
+```
+
+
+## 2.3 Calculating Outcome Variables (Pre-test)
+
+Next, the outcome variables based on the given dataset are computed. 
+
+
+### 2.3.1 Calculating Questionnaire Outcome Variables (Except MCTQ)
+
+All outcome variables (except MCTQ) are calculated by taking the total score.
+
+```{r}
+# Calculating the total scores for pretest data
+df_pretest_Q <- data.frame(ID_reg = dataQ$registration_id,
+                         ID_user = dataQ$user_id,
+                 ISI_total = rowSums(dataQ[, 81:87]),
+                 PHQ_total = rowSums(dataQ[, 46:54]),
+                 GAD_total = rowSums(dataQ[, 56:62]),
+                 WSAS_total = rowSums(dataQ[, 64:68]),
+                 MHQol_total = rowSums(dataQ[, 69:76]))
+
+
+df_pretest_Q
+
+
+```
+
+### 2.3.2 Calculating MCTQ variables
+
+The computed MCTQW variables are the following: average weekly sleep loss (SDWeek),
+weekly sleep loss (SLossWeek), mid sleep on weekdays (MSW), mid sleep on weekends
+(MSF) and absolute social jetlag (SJL).
+
+```{r}
+
+##### MTCQ BASIC VARIABLES #####
+
+# Changing the MTCQ variables to same timeformat
+library(hms)
+dataQ$mctq_werk_daadwerkelijk_slapen_om...11 <- strptime(
+  dataQ$mctq_werk_daadwerkelijk_slapen_om...11, format = "%Y-%m-%d %H:%M:%S")
+
+dataQ$mctq_werk_daadwerkelijk_slapen_om...9 <- strptime(
+  dataQ$mctq_werk_daadwerkelijk_slapen_om...9, format = "%Y-%m-%d %H:%M:%S")
+
+dataQ$mctq_vrij_daadwerkelijk_slapen_om...18 <- strptime(
+  dataQ$mctq_vrij_daadwerkelijk_slapen_om...18, format = "%Y-%m-%d %H:%M:%S")
+
+dataQ$mctq_vrij_daadwerkelijk_slapen_om...16 <- strptime(
+  dataQ$mctq_vrij_daadwerkelijk_slapen_om...16, format = "%Y-%m-%d %H:%M:%S")
+
+
+# Calculating the first MTCQ variables (most results are in hh:mm:ss format)
+library(lubridate)
+
+df_MCTQ <- data.frame(WD = dataQ$mctq_studie_werk_dagenperweek,
+                      SEw = dataQ$mctq_werk_daadwerkelijk_slapen_om...11,
+                      FD = 7 - dataQ$mctq_studie_werk_dagenperweek,
+                      SOw = dataQ$mctq_werk_daadwerkelijk_slapen_om...9 
+                      + minutes(dataQ$mctq_werk_minuten_in_slaap),
+                      SOf = dataQ$mctq_vrij_daadwerkelijk_slapen_om...16 
+                      + minutes(dataQ$mctq_vrij_minuten_in_slaap),
+                      SEf = dataQ$mctq_vrij_daadwerkelijk_slapen_om...18)
+
+
+# Increase time in SEw and SEf by 1 day
+df_MCTQ$SEw <- df_MCTQ$SEw + days(1)
+df_MCTQ$SEf <- df_MCTQ$SEf + days(1)
+
+# If time in SOw is after midnight (between 12AM and 17PM), 
+# we increase the day by 1
+date_condition =  strptime("1899-12-31 17:00:00", format = "%Y-%m-%d %H:%M:%S")
+for (i in 1:nrow(df_MCTQ)){
+  
+  if(is.na(df_MCTQ$SOw[i])) next # Skip missing values
+  
+  if (df_MCTQ$SOw[i] < date_condition){
+    df_MCTQ$SOw[i] = df_MCTQ$SOw[i] + days(1)
+  }
+}
+
+# If time in SOf is after midnight (between 12AM and 17PM), 
+# we increase the day by 1
+for (i in 1:nrow(df_MCTQ)){
+  
+  if(is.na(df_MCTQ$SOf[i])) next # Skip missing values
+  
+  if (df_MCTQ$SOf[i] < date_condition){
+    df_MCTQ$SOf[i] = df_MCTQ$SOf[i] + days(1)
+  }
+}
+
+# Calculating rest of MTCQ basic variables
+df_MCTQ$SDw <- as_hms(df_MCTQ$SEw - df_MCTQ$SOw)
+df_MCTQ$SDf <- as_hms(df_MCTQ$SEf - df_MCTQ$SOf)
+
+
+##### MTCQ COMPUTED VARIABLES #####
+
+# 1. Average weekly sleep duration: (SDw x WD + SDf x FD )/7
+df_pretest_Q$mctq_SDweek <- as_hms((df_MCTQ$SDw * df_MCTQ$WD 
+                                    + df_MCTQ$SDf * df_MCTQ$FD) / 7)
+
+# 2. Weekly sleep loss: 
+# If SDweek > SDw: (SDweek - SDw) x WD; 
+# If SDweek <= SDw: (SDweek - SDf) x FD
+
+df_pretest_Q$mctq_SLossWeek  <- ifelse(df_pretest_Q$mctq_SDweek > df_MCTQ$SDw,  
+                                       (df_pretest_Q$mctq_SDweek - df_MCTQ$SDw) 
+                                       * df_MCTQ$WD,
+                                       (df_pretest_Q$mctq_SDweek - df_MCTQ$SDf) 
+                                       * df_MCTQ$FD)
+df_pretest_Q$mctq_SLossWeek <- as_hms(df_pretest_Q$mctq_SLossWeek)
+
+# 3. Mid sleep on weekdays: SOw + SDw/2 = (SPrepw + SLatw) + SDw/2
+df_pretest_Q$mctq_MSW <- as_hms(df_MCTQ$SOw + df_MCTQ$SDw /2)
+
+# 4. Mid sleep on weekends: SOf + SDf/2 = (SPrepf + SLatf) +  SDf/2
+df_pretest_Q$mctq_MSF <- as_hms(df_MCTQ$SOf + df_MCTQ$SDf/2)
+
+# 5. Absolute Social jetlag
+df_pretest_Q$mctq_SJL <- as_hms(abs(df_pretest_Q$mctq_MSF 
+                                    - df_pretest_Q$mctq_MSW))
+
+
+```
+
+
+## 2.4 Examining Outcome Variables
+Examining the Densities
+
+```{r}
+# Examining the densities of each outcome variable
+par(mfrow=c(2,3))
+
+plot(density(df_pretest_Q$ISI_total), main = "ISI Total Score")
+plot(density(df_pretest_Q$GAD_total, na.rm = T), main = "GAD Total Score")
+plot(density(df_pretest_Q$PHQ_total, na.rm = T),  main = "PHQ Total Score")
+plot(density(df_pretest_Q$WSAS_total, na.rm = T),  main = "WSAS Total Score")
+plot(density(df_pretest_Q$MHQol_total, na.rm = T),  main = "MHQol Total Score")
+
+plot(density(as.numeric(df_pretest_Q$mctq_SDweek), na.rm = T),  
+     main = "MCTQ: Average weekly sleep duration")
+plot(density(as.numeric(df_pretest_Q$mctq_SLossWeek) / 60 / 60, 
+             na.rm = T),  
+     main = "MCTQ: Weekly Sleep loss")
+plot(density(as.numeric(df_pretest_Q$mctq_SJL) / 60 / 60, na.rm = T),  
+     main = "MCTQ: Absolute Social Jetlag")
+
+```
+We can see from the density plots that most variables are not normally distributed
+and we have to take this into account in the simulation. 
+
+
+# 3.Simulating Data 
+
+## 3.1 Post-treatment Simulation
+
+First, the outcome variables for the post-treatment results (n = 3) are calculated
+based on the received data. The code is the same as used to calculate the 
+pre-test variables. 
+
+```{r}
+#####  TOTAL SCORES ##### 
+
+df_posttest_Q <- data.frame(ID_reg = dataQ_post$registration_id,
+                         ID_user = dataQ_post$user_id,
+                 ISI_total = rowSums(dataQ_post[, 6:12]),
+                 PHQ_total = rowSums(dataQ_post[, 53:61]),
+                 GAD_total = rowSums(dataQ_post[, 63:69]),
+                 WSAS_total = rowSums(dataQ_post[, 71:75]),
+                 MHQol_total = rowSums(dataQ_post[, 76:83]))
+
+##### MTCQ BASIC VARIABLES #####
+
+# Changing the MTCQ variables to same timeformat
+library(hms)
+dataQ_post$Post_mctq_werk_daadwerkelijk_slapen_om...16 <- strptime(
+  dataQ_post$Post_mctq_werk_daadwerkelijk_slapen_om...16, 
+  format = "%Y-%m-%d %H:%M:%S")
+
+dataQ_post$Post_mctq_werk_daadwerkelijk_slapen_om...18 <- strptime(
+  dataQ_post$Post_mctq_werk_daadwerkelijk_slapen_om...18, 
+  format = "%Y-%m-%d %H:%M:%S")
+
+dataQ_post$Post_mctq_vrij_daadwerkelijk_slapen_om...23 <- strptime(
+  dataQ_post$Post_mctq_vrij_daadwerkelijk_slapen_om...23, 
+  format = "%Y-%m-%d %H:%M:%S")
+
+dataQ_post$Post_mctq_vrij_daadwerkelijk_slapen_om...25 <- strptime(
+  dataQ_post$Post_mctq_vrij_daadwerkelijk_slapen_om...25, 
+  format = "%Y-%m-%d %H:%M:%S")
+
+
+# Calculating the first MTCQ variables (most results are in hh:mm:ss format)
+library(lubridate)
+
+df_MCTQ_post <- data.frame(WD = dataQ_post$Post_mctq_studie_werk_dagenperweek,
+                      SEw = 
+                        dataQ_post$Post_mctq_werk_daadwerkelijk_slapen_om...18,
+                      FD = 7 - dataQ_post$Post_mctq_studie_werk_dagenperweek,
+                      
+                      SOw = 
+                        dataQ_post$Post_mctq_werk_daadwerkelijk_slapen_om...16 
+                      + minutes(dataQ_post$Post_mctq_werk_minuten_in_slaap),
+                      SOf =
+                        dataQ_post$Post_mctq_vrij_daadwerkelijk_slapen_om...23 
+                      + minutes(dataQ_post$Post_mctq_vrij_minuten_in_slaap),
+                      SEf = 
+                        dataQ_post$Post_mctq_vrij_daadwerkelijk_slapen_om...25)
+
+
+# Increase time in SEw and SEf by 1 day
+df_MCTQ_post$SEw <- df_MCTQ_post$SEw + days(1)
+df_MCTQ_post$SEf <- df_MCTQ_post$SEf + days(1)
+
+# If time in SOw is after midnight (between 12AM and 17PM), 
+# we increase the day by 1
+date_condition =  strptime("1899-12-31 17:00:00", format = "%Y-%m-%d %H:%M:%S")
+for (i in 1:nrow(df_MCTQ_post)){
+  
+  if(is.na(df_MCTQ_post$SOw[i])) next # Skip missing values
+  
+  if (df_MCTQ_post$SOw[i] < date_condition){
+    df_MCTQ_post$SOw[i] = df_MCTQ_post$SOw[i] + days(1)
+  }
+}
+
+# If time in SOf is after midnight (between 12AM and 17PM), 
+# we increase the day by 1
+for (i in 1:nrow(df_MCTQ_post)){
+  
+  if(is.na(df_MCTQ_post$SOf[i])) next # Skip missing values
+  
+  if (df_MCTQ_post$SOf[i] < date_condition){
+    df_MCTQ_post$SOf[i] = df_MCTQ_post$SOf[i] + days(1)
+  }
+}
+
+# Calculating rest of MTCQ basic variables
+df_MCTQ_post$SDw <- as_hms(df_MCTQ_post$SEw - df_MCTQ_post$SOw)
+df_MCTQ_post$SDf <- as_hms(df_MCTQ_post$SEf - df_MCTQ_post$SOf)
+
+
+##### MTCQ COMPUTED VARIABLES #####
+
+# 1. Average weekly sleep duration: (SDw x WD + SDf x FD )/7
+df_posttest_Q$mctq_SDweek <- as_hms((df_MCTQ_post$SDw * df_MCTQ_post$WD 
+                                     + df_MCTQ_post$SDf * df_MCTQ_post$FD) / 7)
+
+# 2. Weekly sleep loss: 
+# If SDweek > SDw: (SDweek - SDw) x WD; 
+# If SDweek <= SDw: (SDweek - SDf) x FD
+
+df_posttest_Q$mctq_SLossWeek  <- ifelse(
+  df_posttest_Q$mctq_SDweek > df_MCTQ_post$SDw,  
+  (df_posttest_Q$mctq_SDweek - df_MCTQ_post$SDw) 
+  * df_MCTQ_post$WD,
+  (df_posttest_Q$mctq_SDweek - df_MCTQ_post$SDf) * df_MCTQ_post$FD)
+df_posttest_Q$mctq_SLossWeek <- as_hms(df_posttest_Q$mctq_SLossWeek)
+
+# 3. Mid sleep on weekdays: SOw + SDw/2 = (SPrepw + SLatw) + SDw/2
+df_posttest_Q$mctq_MSW <- as_hms(df_MCTQ_post$SOw + df_MCTQ_post$SDw /2)
+
+# 4. Mid sleep on weekends: SOf + SDf/2 = (SPrepf + SLatf) +  SDf/2
+df_posttest_Q$mctq_MSF <- as_hms(df_MCTQ_post$SOf + df_MCTQ_post$SDf/2)
+
+# 5. Absolute Social jetlag
+df_posttest_Q$mctq_SJL <- as_hms(abs(df_posttest_Q$mctq_MSF 
+                                     - df_posttest_Q$mctq_MSW))
+
+
+```
+
+Next, the mean and SD of each outcome variable is calculated to get the fixed
+parameters for the simulation. 
+
+```{r}
+# Calculating means and SD for the post-results
+# NOTE: The MCTQ variables are reported in seconds
+stat_post <- data.frame(mean = c(mean(df_posttest_Q$ISI_total), 
+                                      mean(df_posttest_Q$PHQ_total),
+                                      mean(df_posttest_Q$GAD_total),
+                                      mean(df_posttest_Q$WSAS_total),
+                                      mean(df_posttest_Q$MHQol_total),
+                                      mean(df_posttest_Q$mctq_SDweek, 
+                                           na.rm = T),
+                                      mean(df_posttest_Q$mctq_SLossWeek,
+                                           na.rm = T),
+                                      mean(df_posttest_Q$mctq_MSW, 
+                                           na.rm = T),
+                                      mean(df_posttest_Q$mctq_MSF,
+                                           na.rm = T),
+                                      mean(df_posttest_Q$mctq_SJL, 
+                                           na.rm = T)),
+                             
+                             sd = c(sd(df_posttest_Q$ISI_total), 
+                                      sd(df_posttest_Q$PHQ_total),
+                                      sd(df_posttest_Q$GAD_total),
+                                      sd(df_posttest_Q$WSAS_total),
+                                      sd(df_posttest_Q$MHQol_total),
+                                      sd(df_posttest_Q$mctq_SDweek, 
+                                         na.rm = T),
+                                      sd(df_posttest_Q$mctq_SLossWeek, 
+                                         na.rm = T),
+                                      sd(df_posttest_Q$mctq_MSW, 
+                                         na.rm = T),
+                                      sd(df_posttest_Q$mctq_MSF,
+                                         na.rm = T),
+                                      sd(df_posttest_Q$mctq_SJL, 
+                                         na.rm = T)))
+
+stat_pre <- data.frame(mean = c(mean(df_pretest_Q$ISI_total), 
+                                      mean(df_pretest_Q$PHQ_total, 
+                                           na.rm = T),
+                                      mean(df_pretest_Q$GAD_total, 
+                                           na.rm = T),
+                                      mean(df_pretest_Q$WSAS_total, 
+                                           na.rm = T),
+                                      mean(df_pretest_Q$MHQol_total, 
+                                           na.rm = T),
+                                      mean(df_pretest_Q$mctq_SDweek, 
+                                           na.rm = T),
+                                      mean(df_pretest_Q$mctq_SLossWeek, 
+                                           na.rm = T),
+                                      mean(df_pretest_Q$mctq_MSW, 
+                                           na.rm = T),
+                                      mean(df_pretest_Q$mctq_MSF, 
+                                           na.rm = T),
+                                      mean(df_pretest_Q$mctq_SJL, 
+                                           na.rm = T)),
+                             
+                             sd = c(sd(df_pretest_Q$ISI_total, 
+                                       na.rm = T), 
+                                      sd(df_pretest_Q$PHQ_total
+                                         ,na.rm = T),
+                                      sd(df_pretest_Q$GAD_total, 
+                                         na.rm = T),
+                                      sd(df_pretest_Q$WSAS_total, 
+                                         na.rm = T),
+                                      sd(df_pretest_Q$MHQol_total, 
+                                         na.rm = T),
+                                      sd(df_pretest_Q$mctq_SDweek, 
+                                         na.rm = T),
+                                      sd(df_pretest_Q$mctq_SLossWeek,
+                                         na.rm = T),
+                                      sd(df_pretest_Q$mctq_MSW, 
+                                         na.rm = T),
+                                      sd(df_pretest_Q$mctq_MSF, 
+                                         na.rm = T),
+                                      sd(df_pretest_Q$mctq_SJL, na.rm = T)))
+
+
+rownames(stat_post) <- c("ISI", "PHQ", "GAD", "WSAS", "MHQol", "SDWeek", 
+                         "SLossWeek", "MSW", "MSF", "SJL")
+
+rownames(stat_pre) <- c("ISI", "PHQ", "GAD", "WSAS", "MHQol", "SDWeek", 
+                         "SLossWeek", "MSW", "MSF", "SJL")
+
+  
+```
+
+
+
+Finally, we simulate data for the missing participants.
+The shape of each variable ("moments") is studied by using the package PearsonDS 
+and then we simulate data from a similar distribution (using the moments we found
+earlier and using the parameters determined by earlier studies) by using function
+rPearson.
+
+
+
+```{r}
+set.seed(12345)
+library(PearsonDS)
+
+########################################
+#### DETERMING THE SHAPE / MOMENTS ####
+######################################
+
+# User ID's we want for simulated post-treatment
+ID_reg <- df_pretest_Q$ID_reg
+ID_reg <- ID_reg[c(2:3, 5:6, 8:25)] # Removing ID's that have post-treatment results
+
+
+### The moments and parameters for simulation ###
+ISI_param <- pearsonFitML(df_pretest_Q$ISI_total)
+ISI_moments1 <- empMoments(df_pretest_Q$ISI_total)
+ISI_moments <- c(mean = 9.57, 
+                 variance = ( 0.79 * sqrt(length(df_pretest_Q$ISI_total)))^2, 
+                 skewness = ISI_moments1[3], 
+                 kurtosis = ISI_moments1[4])
+
+sim_data <- df_pretest_Q[!is.na(df_pretest_Q$PHQ_total), ] # Remove obs. with NA
+PHQ_param <- pearsonFitML(sim_data$PHQ_total)
+PHQ_moments1 <- empMoments(sim_data$PHQ_total)
+PHQ_moments <- c(mean = 4.41, 
+                 variance = (0.55 * sqrt(length(sim_data$PHQ_total)))^2, 
+                 skewness = PHQ_moments1[3], 
+                 kurtosis = PHQ_moments1[4])
+
+sim_data <- df_pretest_Q[!is.na(df_pretest_Q$GAD_total), ] 
+GAD_param <- pearsonFitML(sim_data$GAD_total)
+GAD_moments1 <- empMoments(sim_data$GAD_total)
+GAD_moments <- c(mean = 5.1, 
+                 variance = 4.7^2, 
+                 skewness = GAD_moments1[3], 
+                 kurtosis = GAD_moments1[4])
+
+sim_data <- df_pretest_Q[!is.na(df_pretest_Q$WSAS_total), ]
+WSAS_param <- pearsonFitML(sim_data$WSAS_total)
+WSAS_moments1 <- empMoments(sim_data$WSAS_total)
+WSAS_moments <- c(mean = 7.5, 
+                 variance = 8.6^2, 
+                 skewness = WSAS_moments1[3], 
+                 kurtosis = WSAS_moments1[4])
+
+sim_data <- df_pretest_Q[!is.na(df_pretest_Q$MHQol_total), ]
+MHQol_param <- pearsonFitML(sim_data$MHQol_total)
+MHQol_moments1 <- empMoments(sim_data$MHQol_total)
+MHQol_moments <- c(mean = stat_post[5, 1], 
+                 variance = var(sim_data$MHQol_total), 
+                 skewness = MHQol_moments1[3], 
+                 kurtosis = MHQol_moments1[4])
+
+sim_data <- df_pretest_Q[!is.na(df_pretest_Q$mctq_SDweek), ]
+mctq_SDweek_param <- pearsonFitML(as.numeric(sim_data$mctq_SDweek))
+mctq_SDweek_moments1 <- empMoments(as.numeric(sim_data$mctq_SDweek))
+mctq_SDweek_moments <- c(mean =  stat_post[6, 1], 
+                 variance = var(sim_data$mctq_SDweek), 
+                 skewness = mctq_SDweek_moments1[3], 
+                 kurtosis = mctq_SDweek_moments1[4])
+
+sim_data <- df_pretest_Q[!is.na(df_pretest_Q$mctq_SLossWeek), ] 
+mctq_SLossWeek_param <- pearsonFitML(as.numeric(sim_data$mctq_SLossWeek))
+mctq_SLossWeek_moments1 <- empMoments(as.numeric(sim_data$mctq_SLossWeek))
+mctq_SLossWeek_moments <- c(mean =  stat_post[7, 1], 
+                 variance = var(sim_data$mctq_SLossWeek), 
+                 skewness = mctq_SLossWeek_moments1[3], 
+                 kurtosis = mctq_SLossWeek_moments1[4])
+
+sim_data <- df_pretest_Q[!is.na(df_pretest_Q$mctq_MSW), ] 
+mctq_MSW_param <- pearsonFitML(as.numeric(sim_data$mctq_MSW))
+mctq_MSW_moments1 <- empMoments(as.numeric(sim_data$mctq_MSW))
+mctq_MSW_moments <- c(mean = stat_post[8, 1], 
+                 variance = var(sim_data$mctq_MSW), 
+                 skewness = mctq_MSW_moments1[3], 
+                 kurtosis = mctq_MSW_moments1[4])
+
+sim_data <- df_pretest_Q[!is.na(df_pretest_Q$mctq_MSF), ] 
+mctq_MSF_param <- pearsonFitML(as.numeric(sim_data$mctq_MSF))
+mctq_MSF_moments1 <- empMoments(as.numeric(sim_data$mctq_MSF))
+mctq_MSF_moments <- c(mean =  stat_post[9, 1], 
+                 variance = var(sim_data$mctq_MSF), 
+                 skewness = mctq_MSF_moments1[3], 
+                 kurtosis = mctq_MSF_moments1[4])
+
+
+
+#####################
+#### SIMULATION ####
+###################
+
+# All the outcome variable for post-results are simulated by using the 
+# shape/moments observed in the data by the giving the parameters 
+# (mean and variance)
+
+df_postsim_Q <- data.frame(
+  
+  ID_reg = ID_reg,
+  
+  ISI_total = round(rpearson(n = length(df_pretest_Q$ISI_total) - 3,
+                             moments = ISI_moments,
+                             params = ISI_param)),
+  
+  PHQ_total = round(rpearson(n = length(df_pretest_Q$PHQ_total) - 3,
+                             moments = PHQ_moments,
+                             params = PHQ_param)),
+  
+  GAD_total = round(rpearson(n = length(df_pretest_Q$GAD_total) - 3,
+                             moments = GAD_moments,
+                             params = GAD_param)),
+  
+  WSAS_total = round(rpearson(n = length(df_pretest_Q$WSAS_total) - 3,
+                             moments = WSAS_moments,
+                             params = WSAS_param)),
+  
+  MHQol_total = round(rpearson(n = length(df_pretest_Q$MHQol_total) - 3,
+                             moments = MHQol_moments,
+                             params = MHQol_param)),
+  
+  mctq_SDweek = round(rpearson(n = length(df_pretest_Q$mctq_SDweek) - 3,
+                             moments = mctq_SDweek_moments,
+                             params = mctq_SDWeek_param)),
+  
+  mctq_SLossWeek = round(rpearson(n = length(df_pretest_Q$mctq_SLossWeek) - 3,
+                             moments = mctq_SLossWeek_moments,
+                             params = mctq_SLossWeek_param)),
+  
+  mctq_MSW = round(rpearson(n = length(df_pretest_Q$mctq_MSW) - 3,
+                             moments = mctq_MSW_moments,
+                             params = mctq_MSW_param)),
+  
+  mctq_MSF = round(rpearson(n = length(df_pretest_Q$mctq_MSF) - 3,
+                             moments = mctq_MSF_moments,
+                             params = mctq_MSF_param))
+)
+
+# Calculating absolute social jetlag
+df_postsim_Q$mctq_SJL <- abs(df_postsim_Q$mctq_MSF - df_postsim_Q$mctq_MSW)
+  
+# Changing scores that are below 0 to 0
+df_postsim_Q[df_postsim_Q < 0] <- 0
+
+# Combining the three post-results and the simulated results
+df_Q_post_final <- rbind(df_posttest_Q[, c(1, 3:12)], df_postsim_Q)
+  
+```
+The explanation for the choices for all the parameters (mean and variance) 
+can be found in the report in Appendix E. 
+
+The table "df_Q_post_final" includes all the post-treatment data: the data
+of the three original participants and simulated data.
+
+
+```{r}
+# Changing the total scores of simulated of participants, 
+# that are missing pre-test values, to NA
+df_Q_post_final[6, c(3:11)] <- NA
+df_Q_post_final[10, c(3:6)] <- NA
+df_Q_post_final[14, c(3:6)] <- NA
+df_Q_post_final[22, c(3:6)] <- NA
+
+```
+
+
+
+## 3.2 Simulating Control Group Data
+
+Next, data for control group is simulated. We assume that the baseline 
+measurements are the same as for the treatment group and then we assume
+a small change in each of the variable based on the literature (See Appendix E in the report).
+
+```{r}
+library(hms)
+library(lubridate)
+
+### PRE-RESULTS: We assume the results are the same as in the control group
+df_controlpre_Q <- df_pretest_Q[3:12]
+df_controlpre_Q$ID_reg <- 1:length(df_pretest_Q$ID_reg)
+
+
+### POST-RESULTS: we assume a mild change in the variables (based on literature)
+df_controlpost_Q <- df_pretest_Q[3:12]
+df_controlpost_Q$ID_reg <- 1:length(df_pretest_Q$ID_reg)
+
+## A small decrease to control ISI-post scores
+df_controlpost_Q$ISI_total <- ifelse(df_controlpost_Q$ISI_total > 0,
+                                    round(df_controlpost_Q$ISI_total - 1.86), 
+                                    0)
+
+## A small decrease to control PHQ-post scores
+df_controlpost_Q$PHQ_total <- ifelse(df_controlpost_Q$PHQ_total > 0,
+                                    round(df_controlpost_Q$PHQ_total  - 1.47), 
+                                    0)
+
+## RA small decrease to control GAD-post scores
+df_controlpost_Q$GAD_total <- ifelse(df_controlpost_Q$GAD_total > 0,
+                                    round(df_controlpost_Q$GAD_total - 0.65), 
+                                    0)
+
+## A small decrease to control WSAS-post scores
+df_controlpost_Q$WSAS_total <- ifelse(df_controlpost_Q$WSAS_total > 0,
+                                    round(df_controlpost_Q$WSAS_total  - 1.76), 
+                                    0)
+
+## Removing one point from  total MHQol scores
+df_controlpost_Q$MHQol_total <- ifelse(df_controlpost_Q$MHQol_total > 0,
+                                    round(df_controlpost_Q$MHQol_total - 1.9), 
+                                    0)
+
+## Increase time 5.9% for control Mid Sleep (week)
+df_controlpost_Q$mctq_MSW <-ifelse(df_controlpost_Q$mctq_MSW > 0,
+                                    df_controlpost_Q$mctq_MSW + 
+                                     (df_controlpost_Q$mctq_MSW * 0.059), 
+                                   0)
+df_controlpost_Q$mctq_MSW <- as_hms(df_controlpost_Q$mctq_MSW)
+
+## Increase time 5.9% for control Mid Sleep (free day)
+df_controlpost_Q$mctq_MSF <- ifelse(df_controlpost_Q$mctq_MSF > 0,
+                                    df_controlpost_Q$mctq_MSF + 
+                                      (df_controlpost_Q$mctq_MSF * 0.059), 0)
+df_controlpost_Q$mctq_MSF <- as_hms(df_controlpost_Q$mctq_MSF)
+
+## Increase time 5.9% for Average Weekly Sleep Duration
+df_controlpost_Q$mctq_SDweek <- ifelse(df_controlpost_Q$mctq_SDweek > 0,
+                                    df_controlpost_Q$mctq_SDweek + 
+                                      (df_controlpost_Q$mctq_SDweek * 0.059), 0)
+df_controlpost_Q$mctq_SDweek <- as_hms(df_controlpost_Q$mctq_SDweek)
+
+
+## Decrease time 5% for Weekly Sleep loss
+df_controlpost_Q$mctq_SLossWeek <- ifelse(df_controlpost_Q$mctq_SLossWeek > 0,
+                                    df_controlpost_Q$mctq_SLossWeek - 
+                                      (df_controlpost_Q$mctq_SLossWeek * 0.05), 
+                                    0)
+df_controlpost_Q$mctq_SLossWeek <- as_hms(df_controlpost_Q$mctq_SLossWeek)
+```
+
+
+```{r}
+## Calculating new SJL for the control group
+df_controlpost_Q$mctq_SJL <- abs(df_controlpost_Q$mctq_MSF - 
+                                   df_controlpost_Q$mctq_MSW)
+
+df_controlpost_Q$mctq_SJL <- as_hms(df_controlpost_Q$mctq_SJL)
+  
+```
+
+
+## 3.3 Combining Questionnaire Data
+
+Next, we want to combine the pre- and post-results into one data frame.
+
+```{r}
+
+# Dropping the extra ID column
+df_pretest_Q <- df_pretest_Q[, c(1, 3:12)]
+
+```
+
+
+```{r}
+# Creating variable "Time"
+df_controlpre_Q$time <- "pre"
+df_controlpost_Q$time <- "post" 
+
+df_pretest_Q$time <- "pre"
+df_Q_post_final$time <- "post"
+
+# Creating variable "Treatment"
+df_controlpre_Q$treatment <- "control"
+df_controlpost_Q$treatment <- "control" 
+
+df_pretest_Q$treatment <- "dCBT-I"
+df_Q_post_final$treatment <- "dCBT-I"
+
+
+# The final table will all the pre-and post results of
+df_questionnaire_data <- do.call("rbind", list(df_controlpre_Q, 
+                                               df_controlpost_Q,
+                                               df_pretest_Q,
+                                               df_Q_post_final))
+
+# Dropping MCTQ MSF and MSW
+df_questionnaire_data <- df_questionnaire_data[, c(1:7, 10:13)]
+
+# Making variables "Time" and "Treatment" factors
+df_questionnaire_data$time <- as.factor(df_questionnaire_data$time)
+df_questionnaire_data$treatment <- as.factor(df_questionnaire_data$treatment) 
+```
+
+
+
+# 4. Examination of the Full Dataset
+
+## 4.1 Summary of the Dataset
+
+The following table shows the summary statistics for the pre-results in the control group.
+The time variables are divided by 60 so that the time is in minutes. 
+
+```{r}
+summary_c_pre <- 
+  df_questionnaire_data[df_questionnaire_data$treatment == "control"
+                                       & df_questionnaire_data$time == "pre", ]
+
+summary_c_pre$mctq_SDweek <- as.numeric(summary_c_pre$mctq_SDweek)
+summary_c_pre$mctq_SLossWeek <- as.numeric(summary_c_pre$mctq_SLossWeek )
+summary_c_pre$mctq_SJL <- as.numeric(summary_c_pre$mctq_SJL)
+
+summary_table <- data.frame(
+  mean = apply(summary_c_pre[, c(1:8)], 2, mean, na.rm = T),
+  SD = apply(summary_c_pre[, c(1:8)], 2, sd, na.rm = T)
+)
+
+summary_table[6, 1] <- summary_table[6, 1] / 60 
+summary_table[6, 2] <- summary_table[6, 2] / 60
+summary_table[7, 1] <- summary_table[7, 1] / 60
+summary_table[7, 2] <- summary_table[7, 2] / 60
+summary_table[8, 1] <- summary_table[8, 1] / 60 
+summary_table[8, 2] <- summary_table[8, 2] / 60 
+
+summary_table
+
+```
+
+
+The following table shows the summary statistics for the post-results in the control group.
+
+```{r}
+summary_c_post <- 
+  df_questionnaire_data[df_questionnaire_data$treatment == "control"
+                                       & df_questionnaire_data$time == "post", ]
+
+summary_c_post$mctq_SDweek <- as.numeric(summary_c_post$mctq_SDweek)
+summary_c_post$mctq_SLossWeek <- as.numeric(summary_c_post$mctq_SLossWeek )
+summary_c_post$mctq_SJL <- as.numeric(summary_c_post$mctq_SJL)
+
+summary_table <- data.frame(
+  mean = apply(summary_c_post[, c(1:8)], 2, mean, na.rm = T),
+  SD = apply(summary_c_post[, c(1:8)], 2, sd, na.rm = T)
+)
+
+summary_table[6, 1] <- summary_table[6, 1] / 60 
+summary_table[6, 2] <- summary_table[6, 2] / 60
+summary_table[7, 1] <- summary_table[7, 1] / 60
+summary_table[7, 2] <- summary_table[7, 2] / 60
+summary_table[8, 1] <- summary_table[8, 1] / 60 
+summary_table[8, 2] <- summary_table[8, 2] / 60 
+
+summary_table
+
+```
+
+The following table shows the summary statistics for the pre-results in the treatment group.
+
+```{r}
+summary_t_pre <- 
+  df_questionnaire_data[df_questionnaire_data$treatment == "dCBT-I"
+                                       & df_questionnaire_data$time == "pre", ]
+summary_t_pre$mctq_SDweek <- as.numeric(summary_t_pre$mctq_SDweek)
+summary_t_pre$mctq_SLossWeek <- as.numeric(summary_t_pre$mctq_SLossWeek )
+summary_t_pre$mctq_SJL <- as.numeric(summary_t_pre$mctq_SJL)
+
+summary_pret <- data.frame(
+  mean = apply(summary_t_pre[, c(1:8)], 2, mean, na.rm = T),
+  SD = apply(summary_t_pre[, c(1:8)], 2, sd, na.rm = T)
+)
+
+summary_pret[6, 1] <- summary_pret[6, 1] / 60 
+summary_pret[6, 2] <- summary_pret[6, 2] / 60
+summary_pret[7, 1] <- summary_pret[7, 1] / 60
+summary_pret[7, 2] <- summary_pret[7, 2] / 60
+summary_pret[8, 1] <- summary_pret[8, 1] / 60 
+summary_pret[8, 2] <- summary_pret[8, 2] / 60 
+
+summary_pret
+
+```
+
+The following table shows the summary statistics for the post-results in the treatment group.
+
+```{r}
+summary_t_post <- 
+  df_questionnaire_data[df_questionnaire_data$treatment == "dCBT-I"
+                                       & df_questionnaire_data$time == "post", ]
+
+summary_t_post$mctq_SDweek <- as.numeric(summary_t_post$mctq_SDweek)
+summary_t_post$mctq_SLossWeek <- as.numeric(summary_t_post$mctq_SLossWeek )
+summary_t_post$mctq_SJL <- as.numeric(summary_t_post$mctq_SJL)
+
+summary_table <- data.frame(
+  mean = apply(summary_t_post[, c(1:8)], 2, mean, na.rm = T),
+  SD = apply(summary_t_post[, c(1:8)], 2, sd, na.rm = T)
+)
+
+summary_table[6, 1] <- summary_table[6, 1] / 60 
+summary_table[6, 2] <- summary_table[6, 2] / 60
+summary_table[7, 1] <- summary_table[7, 1] / 60
+summary_table[7, 2] <- summary_table[7, 2] / 60
+summary_table[8, 1] <- summary_table[8, 1] / 60 
+summary_table[8, 2] <- summary_table[8, 2] / 60 
+
+summary_table
+```
+
+
+
+## 4.2 The Ranges of the Outcome Variables
+
+Next, we want to check that all the outcoem variables are within the allowed ranges
+(the ranges vary per questionnaire). 
+
+```{r}
+# Checking that min and max score for each outcome variable aren't out
+# of range
+
+## ISI
+paste("ISI range is 0-28. Our ISI-score min:", 
+      min(df_questionnaire_data$ISI_total), "and max:", 
+      max(df_questionnaire_data$ISI_total))
+
+## PHQ
+paste("PHQ range is 0-27. Our PHQ-score min:", 
+      min(df_questionnaire_data$PHQ_total, na.rm = T), 
+      "and max:", max(df_questionnaire_data$PHQ_total, na.rm = T))
+
+## GAD
+paste("GAD range is 0-21. Our GAD-score min:", 
+      min(df_questionnaire_data$GAD_total, na.rm = T), 
+      "and max:", max(df_questionnaire_data$GAD_total, na.rm = T))
+
+## WSAS
+paste("WSAS range is 0-40. Our WSAS-score min:", 
+      min(df_questionnaire_data$WSAS_total, na.rm = T), 
+      "and max:", max(df_questionnaire_data$WSAS_total, na.rm = T))
+
+## MHQol
+paste("MHQol range is 0-38. Our MHQol-score min:", 
+      min(df_questionnaire_data$MHQol_total, na.rm = T), 
+      "and max:", max(df_questionnaire_data$MHQol_total, na.rm = T))
+
+## MCTQ-SDweek
+paste("MCTQ-SDweek (time in seconds) >= 0. Our MCTQ-SDweek -score min:", 
+      min(df_questionnaire_data$mctq_SDweek, na.rm = T))
+
+## MCTQ-SLossWeek
+paste("MCTQ-SLossWeek (time in seconds) >= 0. Our MCTQ-SLossWeek -score min:", 
+      min(df_questionnaire_data$mctq_SLossWeek, na.rm = T))
+
+## MCTQ-SJL
+paste("MCTQ-SJL (time in seconds) >= 0. Our MCTQ-SJL -score min:", 
+      min(df_questionnaire_data$mctq_SJL, na.rm = T))
+
+```
+
+
+
+## 4.3 Comparing Simulated vs. Actual Data Plots
+
+Next the distribution of the pre-treatment and (simulated) post-treatment
+were studied and also the distributions for the pre-and pots-results were 
+examined for each variable separately.
+
+### 4.3.1 ISI-Score Distributions
+
+```{r}
+data <- df_questionnaire_data
+par(mfrow=c(2,2))
+
+### ISI-SCORE ###
+
+# Treatment Group (Pre)
+hist(data[data$treatment == "dCBT-I" & data$time == "pre", 1], 
+     xlim  = c(0,25),
+     main = "ISI-SCore for Treatment (Pre)", 
+     xlab = "ISI Total Score", 
+     col = "lightblue")
+
+plot(density(data[data$treatment == "dCBT-I" & data$time == "pre", 1]),
+      main = "ISI-SCore for Treatment (Pre)")
+polygon(density(data[data$treatment == "dCBT-I" & data$time == "pre", 1]),
+        col = "lightblue")
+
+
+# Treatment Group (Post)
+hist(data[data$treatment == "dCBT-I" & data$time == "post", 1], 
+     xlim  = c(0,25),
+     main = "ISI-SCore for Treatment (Post)",  
+     xlab = "ISI Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "dCBT-I" & data$time == "post", 1]),
+      main = "ISI-SCore for Treatment (Post)")
+polygon(density(data[data$treatment == "dCBT-I" & data$time == "post", 1]),
+        col = "lightblue")
+
+
+# Control Group (Pre)
+hist(data[data$treatment == "control" & data$time == "pre", 1], 
+     xlim  = c(0,25),
+     main = "ISI-Score for the Control (Pre)", 
+     xlab = "ISI Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "control" & data$time == "pre", 1]),
+     main = "ISI-Score for the Control (Pre)")
+polygon(density(data[data$treatment == "control" & data$time == "pre", 1]),
+        col = "lightblue")
+
+
+# Control Group (Post)
+hist(data[data$treatment == "control" & data$time == "post", 1], 
+     xlim  = c(0,25),
+     main = "ISI-Score for the Control (Post)",  
+     xlab = "ISI Total Score",
+     col = "lightblue")
+plot(density(data[data$treatment == "control" & data$time == "post", 1]),
+     main = "ISI-Score for the Control (Post)")
+polygon(density(data[data$treatment == "control" & data$time == "post", 1]),
+        col = "lightblue")
+
+```
+
+
+### 4.3.2 PHQ-Score Distributions
+
+```{r}
+###  PHQ-SCORE ###
+par(mfrow=c(2,2), bg = "#f0f0f0")
+
+# Treatment Group (Pre)
+hist(data[data$treatment == "dCBT-I" & data$time == "pre", 2], 
+     xlim  = c(0,25),
+     main = "PHQ-SCore for Treatment (Pre)", 
+     xlab = "PHQ Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "dCBT-I" & data$time == "pre", 2],
+             na.rm = T),
+     main = "PHQ-Score for Treatment (Pre)")
+polygon(density(data[data$treatment == "dCBT-I" & data$time == "pre", 2],
+                na.rm = T),
+        col = "lightblue")
+
+
+# Treatment Group (Post)
+hist(data[data$treatment == "dCBT-I" & data$time == "post", 2], 
+     xlim  = c(0,25),
+     main = "PHQ-SCore for Treatment (Post)", 
+     xlab = "PHQ Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "dCBT-I" & data$time == "post", 2], 
+             na.rm = T), 
+     main = "PHQ-SCore for Treatment (Post)")
+polygon(density(data[data$treatment == "dCBT-I" & data$time == "post", 2], 
+                na.rm = T),
+        col = "lightblue")
+
+# Control Group (Pre)
+hist(data[data$treatment == "control" & data$time == "pre", 2], 
+     xlim  = c(0,25), 
+     main = "PHQ-Score for the Control (Pre)", 
+     xlab = "PHQ Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "control" & data$time == "pre", 2], 
+             na.rm = T),
+      main = "PHQ-Score for the Control (Pre)")
+polygon(density(data[data$treatment == "control" & data$time == "pre", 2], 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Control Group (Post)
+hist(data[data$treatment == "control" & data$time == "post", 2], 
+     xlim  = c(0,25),
+     main = "PHQ-Score for the Control (Post)", 
+     xlab = "PHQ Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "control" & data$time == "post", 2], 
+             na.rm = T),
+      main = "PHQ-Score for the Control (Post)")
+polygon(density(data[data$treatment == "control" & data$time == "post", 2], 
+                na.rm = T),
+        col = "lightblue")
+
+
+```
+
+
+
+### 4.3.3 GAD-Score Distributions
+
+```{r}
+###  GAD-SCORE ###
+par(mfrow=c(2,2))
+
+# Treatment Group (Pre)
+hist(data[data$treatment == "dCBT-I" & data$time == "pre", 3], 
+     xlim  = c(0,25),
+     main = "GAD-Score for Treatment (Pre)", 
+     xlab = "GAD Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "dCBT-I" & data$time == "pre", 3], 
+             na.rm = T), 
+     main = "GAD-Score for Treatment (Pre)")
+polygon(density(data[data$treatment == "dCBT-I" & data$time == "pre", 3], 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Treatment Group (Post)
+hist(data[data$treatment == "dCBT-I" & data$time == "post", 3], 
+     xlim  = c(0,25),
+     main = "GAD-SCore for Treatment (Post)",
+     xlab = "GAD Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "dCBT-I" & data$time == "post", 3], 
+             na.rm = T),
+      "GAD-Score for Treatment (Post)")
+polygon(density(data[data$treatment == "dCBT-I" & data$time == "post", 3], 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Control Group (Pre)
+hist(data[data$treatment == "control" & data$time == "pre", 3], xlim  = c(0,25),
+     main = "GAD-Score for the Control (Pre)", 
+     xlab = "GAD Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "control" & data$time == "pre", 3], 
+             na.rm = T),
+      main = "GAD-Score for the Control (Pre)")
+polygon(density(data[data$treatment == "control" & data$time == "pre", 3], 
+                na.rm = T),
+        col = "lightblue")
+
+# Control Group (Post)
+hist(data[data$treatment == "control" & data$time == "post", 3], xlim  = c(0,25),
+     main = "GAD-Score for the Control (Post)", 
+     xlab = "GAD Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "control" & data$time == "post", 3], 
+             na.rm = T),
+      main = "GAD-Score for the Control (Post)")
+polygon(density(data[data$treatment == "control" & data$time == "post", 3], 
+                na.rm = T),
+        col = "lightblue")
+
+```
+
+
+### 4.3.4 WSAS-Score Distributions
+
+```{r}
+###  WSAS- SCORE ###
+par(mfrow=c(2,2))
+
+# Treatment Group (Pre)
+hist(data[data$treatment == "dCBT-I" & data$time == "pre", 4], 
+     xlim  = c(0,50),
+     main = "WSAS-Score for Treatment (Pre)", 
+     xlab = "WSAS Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "dCBT-I" & data$time == "pre", 4], 
+             na.rm = T),
+      main = "WSAS-Score for Treatment (Pre)")
+polygon(density(data[data$treatment == "dCBT-I" & data$time == "pre", 4], 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Treatment Group (Post)
+hist(data[data$treatment == "dCBT-I" & data$time == "post", 4], 
+     xlim  = c(0,50),
+     main = "WSAS-Score for Treatment (Post)",  
+     xlab = "WSAS Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "dCBT-I" & data$time == "post", 4], 
+             na.rm = T),
+      main = "WSAS-Score for Treatment (Post)")
+polygon(density(data[data$treatment == "dCBT-I" & data$time == "post", 4], 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Control Group (Pre)
+hist(data[data$treatment == "control" & data$time == "pre", 4], 
+     xlim  = c(0,50),
+     main = "WSAS-Score for the Control (Pre)",
+     xlab = "WSAS Total Score",
+     col = "lightblue")
+
+
+plot(density(data[data$treatment == "control" & data$time == "pre", 4], 
+             na.rm = T),
+     main = "WSAS-Score for the Control (Pre)")
+polygon(density(data[data$treatment == "control" & data$time == "pre", 4], 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Control Group (Post)
+hist(data[data$treatment == "control" & data$time == "post", 4], 
+     xlim  = c(0,50),
+     main = "WSAS-Score for the Control (Post)",
+     xlab = "WSAS Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "control" & data$time == "post", 4], 
+             na.rm = T),
+      main = "WSAS-Score for the Control (Post)")
+polygon(density(data[data$treatment == "control" & data$time == "post", 4], 
+                na.rm = T),
+        col = "lightblue")
+
+```
+
+
+### 4.3.5 MHQol-Score Distributions
+
+```{r}
+###  MHQol- SCORE ###
+par(mfrow=c(2,2))
+
+# Treatment Group (Pre)
+hist(data[data$treatment == "dCBT-I" & data$time == "pre", 5], 
+     xlim  = c(0,50),
+     main = "MHQol-Score for Treatment (Pre)",
+     xlab = "MHQol Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "dCBT-I" & data$time == "pre", 5], 
+             na.rm = T),
+      main = "MHQol-Score for Treatment (Pre)")
+polygon(density(data[data$treatment == "dCBT-I" & data$time == "pre", 5], 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Treatment Group (Post)
+hist(data[data$treatment == "dCBT-I" & data$time == "post", 5], 
+     xlim  = c(0,50),
+     main = "WSAS-SCore for Treatment (Post)",      
+     xlab = "MHQol Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "dCBT-I" & data$time == "post", 5], 
+             na.rm = T),
+      "WSAS-Score for Treatment (Post)")
+polygon(density(data[data$treatment == "dCBT-I" & data$time == "post", 5], 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Control Group (Pre)
+hist(data[data$treatment == "control" & data$time == "pre", 5], 
+     xlim  = c(0,50),
+     main = "MHQol-Score for the Control (Pre)",
+     xlab = "MHQol Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "control" & data$time == "pre", 5], 
+             na.rm = T),
+      main = "MHQol-Score for the Control (Pre)")
+polygon(density(data[data$treatment == "control" & data$time == "pre", 5], 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Control Group (Post)
+hist(data[data$treatment == "control" & data$time == "post", 5], 
+     xlim  = c(0,50),
+     main = "MHQol-Score for the Control (Post)",      
+     xlab = "MHQol Total Score",
+     col = "lightblue")
+
+plot(density(data[data$treatment == "control" & data$time == "post", 5],
+             na.rm = T),
+      main = "MHQol-Score for the Control (Post)")
+polygon(density(data[data$treatment == "control" & data$time == "post", 5], 
+                na.rm = T),
+        col = "lightblue")
+
+```
+
+
+### 4.3.6 MCTQ-SDWeek Distributions
+
+Distributions for the average weekly sleep duration.
+
+```{r}
+###  MCTQ-SDweek TIME ###
+par(mfrow=c(2,2))
+
+# Treatment Group (Pre)
+hist(as.numeric(data[data$treatment == "dCBT-I" & data$time == "pre", 6] / 60),
+     main = "SDweek -Score for Treatment (Pre)",
+     xlab = "SDweek in minutes",
+     col = "lightblue")
+
+plot(density(as.numeric(data[data$treatment == "dCBT-I" 
+                             & data$time == "pre", 6]), 
+             na.rm = T),
+      main = "SDweek -Score for Treatment (Pre)")
+polygon(density(as.numeric(data[data$treatment == "dCBT-I" 
+                                & data$time == "pre", 6]), 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Treatment Group (Post)
+hist(as.numeric(data[data$treatment == "dCBT-I" & data$time == "post", 6] / 60),
+     main = "SDweek for Treatment (Post)",
+     xlab = "SDweek in minutes",
+     col = "lightblue")
+
+plot(density(as.numeric(data[data$treatment == "dCBT-I" 
+                             & data$time == "post", 6]), 
+             na.rm = T),
+      main = "SDweek for Treatment (Post)")
+polygon(density(as.numeric(data[data$treatment == "dCBT-I" 
+                                & data$time == "post", 6]), 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Control Group (Pre)
+hist(as.numeric(data[data$treatment == "control" & data$time == "pre", 6] / 60),
+     main = "SDweek for the Control (Pre)",      
+     xlab = "SDweek in minutes",
+     col = "lightblue")
+
+plot(density(as.numeric(data[data$treatment == "control" 
+                             & data$time == "pre", 6]), 
+             na.rm = T),
+      main = "SDweek for the Control (Pre)")
+polygon(density(as.numeric(data[data$treatment == "control" 
+                                & data$time == "pre", 6]), 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Control Group (Post)
+hist(as.numeric(data[data$treatment == "control" 
+                     & data$time == "post", 6] / 60),
+     main = "SDweek -Score for the Control (Post)",
+     xlab = "SDweek in minutes",
+     col = "lightblue")
+
+plot(density(as.numeric(data[data$treatment == "control" 
+                             & data$time == "post", 6]), 
+             na.rm = T),
+      main = "SDweek -Score for the Control (Post)")
+polygon(density(as.numeric(data[data$treatment == "control" 
+                                & data$time == "post", 6]), 
+                na.rm = T),
+        col = "lightblue")
+
+
+```
+
+
+### 4.3.7 MCTQ-SLossWeek Distributions
+
+Distributions for the average weekly sleep loss. 
+
+```{r}
+###  MCTQ-MSF TIME ###
+par(mfrow=c(2,2))
+
+# Treatment Group (Pre)
+hist(as.numeric(data[data$treatment == "dCBT-I" & data$time == "pre", 7] / 60),
+     main = "SLossWeek for Treatment (Pre)",
+     xlab = "SLossWeek in minutes",
+     col = "lightblue")
+
+plot(density(as.numeric(data[data$treatment == "dCBT-I" 
+                             & data$time == "pre", 7]), 
+             na.rm = T),
+      main = "SLossWeek for Treatment (Pre)")
+polygon(density(as.numeric(data[data$treatment == "dCBT-I" 
+                                & data$time == "pre", 7]), 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Treatment Group (Post)
+hist(as.numeric(data[data$treatment == "dCBT-I" & data$time == "post", 7] / 60),
+     main = "SLossWeek for Treatment (Post)",
+     xlab = "SLossWeek in minutes",
+     col = "lightblue")
+
+plot(density(as.numeric(data[data$treatment == "dCBT-I" 
+                             & data$time == "post", 7]), 
+             na.rm = T),
+      main = "SLossWeek for Treatment (Post)")
+polygon(density(as.numeric(data[data$treatment == "dCBT-I" 
+                                & data$time == "post", 7]), 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Control Group (Pre)
+hist(as.numeric(data[data$treatment == "control" & data$time == "pre", 7] / 60),
+     main = "SLossWeek for the Control (Pre)",      
+     xlab = "SLossWeek in minutes",
+     col = "lightblue")
+
+plot(density(as.numeric(data[data$treatment == "control" 
+                             & data$time == "pre", 7]), 
+             na.rm = T),
+      main = "SLossWeek for the Control (Pre)")
+polygon(density(as.numeric(data[data$treatment == "control" 
+                                & data$time == "pre", 7]), 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Control Group (Post)
+hist(as.numeric(data[data$treatment == "control" 
+                     & data$time == "post", 7]) / 60,
+     main = "SLossWeek for the Control (Post)",
+     xlab = "SLossWeek in minutes",
+     col = "lightblue")
+
+plot(density(as.numeric(data[data$treatment == "control" 
+                             & data$time == "post", 7]) , 
+             na.rm = T),
+      main = "SLossWeek for the Control (Post)")
+polygon(density(as.numeric(data[data$treatment == "control" 
+                                & data$time == "post", 7]), 
+                na.rm = T),
+        col = "lightblue")
+
+
+```
+
+
+### 4.3.8 MCTQ-SJL Distributions
+
+Distributions for the absolute social jetlag.
+
+```{r}
+###  MCTQ-SJL TIME ###
+par(mfrow=c(2,2))
+
+# Treatment Group (Pre)
+hist(as.numeric(data[data$treatment == "dCBT-I" & data$time == "pre", 8]) / 60,
+     main = "SJL for Treatment (Pre)",
+     xlab = "SJL in minutes",
+     col = "lightblue")
+
+plot(density(as.numeric(data[data$treatment == "dCBT-I" 
+                             & data$time == "pre", 8]), 
+             na.rm = T),
+      main = "SJL for Treatment (Pre)")
+polygon(density(as.numeric(data[data$treatment == "dCBT-I" 
+                                & data$time == "pre", 8]), 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Treatment Group (Post)
+hist(as.numeric(data[data$treatment == "dCBT-I" & data$time == "post", 8]) / 60,
+     main = "SJL for Treatment (Post)",
+     xlab = "SJL in minutes",
+     col = "lightblue")
+
+plot(density(as.numeric(data[data$treatment == "dCBT-I" 
+                             & data$time == "post", 8]), 
+             na.rm = T),
+      main = "SJL for Treatment (Post)")
+polygon(density(as.numeric(data[data$treatment == "dCBT-I" 
+                                & data$time == "post", 8]), 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Control Group (Pre)
+hist(as.numeric(data[data$treatment == "control" & data$time == "pre", 8]) / 60,
+     main = "SJL for the Control (Pre)",      
+     xlab = "SJL in minutes",
+     col = "lightblue")
+
+plot(density(as.numeric(data[data$treatment == "control" 
+                             & data$time == "pre", 8]), 
+             na.rm = T),
+      main = "SJL for the Control (Pre)")
+polygon(density(as.numeric(data[data$treatment == "control" 
+                                & data$time == "pre", 8]), 
+                na.rm = T),
+        col = "lightblue")
+
+
+# Control Group (Post)
+hist(as.numeric(data[data$treatment == "control" 
+                     & data$time == "post", 8]) / 60,
+     main = "SJL for the Control (Post)",
+     xlab = "SJL in minutes",
+     col = "lightblue")
+
+plot(density(as.numeric(data[data$treatment == "control" 
+                             & data$time == "post", 8]), 
+             na.rm = T),
+      main = "SJL for the Control (Post)")
+polygon(density(as.numeric(data[data$treatment == "control" 
+                                & data$time == "post", 8]), 
+                na.rm = T),
+        col = "lightblue")
+
+
+```
+
+
+
+# 5. Results of the Analysis
+
+## 5.1 LMM Results
+
+In balanced case, ML and REML lead to same results but if the data is unbalanced,
+only REML can be used. Therefore, REML was used in all of the analysis as it is
+applicable in every case. 
+
+```{r}
+# The full dataset was copied to test_data which was used in the analysis. 
+# This was done so that we would still have copy of the original data in case 
+# some changes are needed for the analysis.
+
+test_data <- df_questionnaire_data
+test_data$treatment <- as.numeric(test_data$treatment)
+
+# Labeling treatment so that control = 0 and treatment = 1
+test_data[test_data$treatment == "1", 11] <- 0
+test_data[test_data$treatment == "2", 11] <- 1
+
+# Labeling time so that pre = 0 and post = 1
+test_data$time <- as.numeric(test_data$time)
+test_data[test_data$time == 2, 10] <- 0
+test_data[test_data$time == 1, 10] <- 1
+
+```
+
+```{r}
+# Treatment and time were changed to categorical / factorised
+test_data$treatment <- as.factor(test_data$treatment)
+test_data$time <- as.factor(test_data$time)
+
+```
+
+
+
+### 5.1.1: Results for ISI-Score
+
+```{r}
+library(lme4)
+library(lmerTest)
+
+
+# Fitting the model
+LMM_ISI <- lmer(ISI_total ~ treatment + time +  treatment:time +  ( 1|ID_reg),
+               data = test_data,
+               REML = T)
+
+# Results of LMM 
+summary(LMM_ISI)
+
+```
+
+
+
+```{r}
+library(car)
+par(mfrow=c(2,2))
+
+### Equal Variance Assumption ###
+
+## Plot residuals vs. fitted values: 
+## residuals should be approximately equally distributed around 0
+
+## 1. Raw Residuals vs. Fitted values
+plot(resid(LMM_ISI, type = "response") ~ fitted(LMM_ISI),
+    main = "Raw Residuals vs. Fitted Values",
+     ylab = "RaW Residuals",
+     ylim = c(-6, 6),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_ISI), resid(LMM_ISI, type = "response")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 2. Pearson Residuals vs. Fitted values
+plot(resid(LMM_ISI, type = "pearson") ~ fitted(LMM_ISI),
+    main = "Pearson Residuals vs. Fitted Values",
+     ylab = "Pearson Residuals",
+     ylim = c(-5, 5),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_ISI), resid(LMM_ISI, type = "pearson")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 3. Standardized Residuals vs. Fitted values
+plot(resid(LMM_ISI, scaled = T) ~ fitted(LMM_ISI),
+    main = "Standardized Residuals vs. Fitted Values",
+     ylab = "Ststandardized Residuals",
+     ylim = c(-5, 5),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_ISI), resid(LMM_ISI, scaled = T)), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+
+
+### Normally Distributed Residuals Assumption ###
+
+## 1. QQ-plot of the standardized residuals
+qqPlot(resid(LMM_ISI, scaled = T),
+       main = "Standardized residuals vs. Quantiles",
+       ylab = "Standardized Residuals", 
+       xlab = "Quantiles",
+       pch = 19,
+       col = "cornflowerblue",
+       grid = F,
+       id = F,
+       envelope = list(style = "lines"))
+
+
+## 2. Histogram of the standardized residuals
+hist(resid(LMM_ISI, scaled = T),
+     density = 30, col = "black",
+     main = "Distribution of the Standardized Residuals",
+     xlab = "Standardized Residuals",
+     prob = T)
+curve(dnorm(x, mean = mean(resid(LMM_ISI, scaled = T)), 
+            sd = sd(resid(LMM_ISI, scaled = T))),
+      col = "blue", lwd = 2, add = T, yaxt="n")
+
+```
+We can see that the residuals, especially when standardized, have a normal 
+distributions and are approximately equally distributed around 0.
+
+
+
+### 5.1.2: Results for PHQ-score
+
+```{r}
+library(lme4)
+library(lmerTest)
+
+
+# Fitting the model
+LMM_PHQ <- lmer(PHQ_total ~ treatment + time +  treatment:time +  ( 1|ID_reg),
+               data = test_data,
+               REML = T)
+
+# Results of LMM 
+summary(LMM_PHQ)
+
+```
+
+
+```{r}
+library(car)
+par(mfrow=c(2,2))
+
+### Equal Variance Assumption ###
+
+## 1. Raw Residuals vs. Fitted values
+plot(resid(LMM_PHQ, type = "response") ~ fitted(LMM_PHQ),
+    main = "Raw Residuals vs. Fitted Values",
+     ylab = "RaW Residuals",
+     ylim = c(-6, 6),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_PHQ), resid(LMM_PHQ, type = "response")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 2. Pearson Residuals vs. Fitted values
+plot(resid(LMM_PHQ, type = "pearson") ~ fitted(LMM_PHQ),
+    main = "Pearson Residuals vs. Fitted Values",
+     ylab = "Pearson Residuals",
+     ylim = c(-5, 5),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_PHQ), resid(LMM_PHQ, type = "pearson")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 3. Standardized Residuals vs. Fitted values
+plot(resid(LMM_PHQ) ~ fitted(LMM_PHQ),
+    main = "Standardized Residuals vs. Fitted Values",
+     ylab = "Ststandardized Residuals",
+     ylim = c(-5, 5),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_PHQ), resid(LMM_PHQ, scaled = T)), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+
+### Normally Distributed Residuals Assumption ###
+
+## 1. QQ-plot of the standardized residuals
+qqPlot(resid(LMM_PHQ, scaled = T),
+       main = "Standardized residuals vs. Quantiles",
+       ylab = "Standardized Residuals", 
+       xlab = "Quantiles",
+       pch = 19,
+       col = "cornflowerblue",
+       grid = F,
+       id = F,
+       envelope = list(style = "lines"))
+
+
+## 2. Histogram of the standardized residuals
+hist(resid(LMM_PHQ, scaled = T),
+     density = 30, col = "black",
+     main = "Distribution of the Standardized Residuals",
+     xlab = "Standardized Residuals",
+     prob = T)
+curve(dnorm(x, mean = mean(resid(LMM_PHQ, scaled = T)), 
+            sd = sd(residuals(LMM_PHQ, scaled = T))),
+      col = "blue", lwd = 2, add = T, yaxt="n")
+
+
+```
+No violation of the assumptions.
+
+
+### 5.1.3: Results of GAD-Scores
+
+```{r}
+library(lme4)
+library(lmerTest)
+
+# Fitting the model
+LMM_GAD <- lmer(GAD_total ~ treatment + time +  treatment:time +  ( 1|ID_reg),
+               data = test_data,
+               REML = T)
+
+
+# Results of LMM 
+summary(LMM_GAD)
+
+```
+
+
+```{r}
+library(car)
+par(mfrow=c(2,2))
+
+### Equal Variance Assumption ###
+
+## 1. Raw Residuals vs. Fitted values
+plot(resid(LMM_GAD, type = "response") ~ fitted(LMM_GAD),
+    main = "Raw Residuals vs. Fitted Values",
+     ylab = "RaW Residuals",
+     ylim = c(-6, 6),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_GAD), resid(LMM_GAD, type = "response")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 2. Pearson Residuals vs. Fitted values
+plot(resid(LMM_GAD, type = "pearson") ~ fitted(LMM_GAD),
+    main = "Pearson Residuals vs. Fitted Values",
+     ylab = "Pearson Residuals",
+     ylim = c(-5, 5),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_GAD), resid(LMM_GAD, type = "pearson")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 3. Standardized Residuals vs. Fitted values
+plot(resid(LMM_GAD, scaled = T) ~ fitted(LMM_GAD),
+     main = "Standardized Residuals vs. Fitted Values",
+     ylab = "Ststandardized Residuals",
+     ylim = c(-5, 5),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_GAD), resid(LMM_GAD, scaled = T)), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+
+### Normally Distributed Residuals Assumption ###
+
+## 1. QQ-plot of the standardized residuals
+qqPlot(resid(LMM_GAD, scaled = T),
+       main = "Standardized residuals vs. Quantiles",
+       ylab = "Standardized Residuals", 
+       xlab = "Quantiles",
+       pch = 19,
+       col = "cornflowerblue",
+       grid = F,
+       id = F,
+       envelope = list(style = "lines"))
+
+
+## 2. Histogram of the standardized residuals
+hist(resid(LMM_GAD, scaled = T),
+     density = 30, col = "black",
+     main = "Distribution of the Standardized Residuals",
+     xlab = "Standardized Residuals",
+     prob = T)
+curve(dnorm(x, mean = mean(resid(LMM_GAD, scaled = T)), 
+            sd = sd(resid(LMM_GAD, scaled = T))),
+      col = "blue", lwd = 2, add = T, yaxt="n")
+
+```
+
+No violation of the assumptions.
+
+### 5.1.4. Results of WSAS-scores
+
+#### 5.1.4.1 Regular LMM
+
+```{r}
+library(lme4)
+library(lmerTest)
+
+# Fitting the model
+LMM_WSAS <- lmer(WSAS_total ~ treatment + time +  treatment:time +  ( 1|ID_reg),
+               data = test_data,
+               REML = T)
+
+
+# Results of LMM 
+summary(LMM_WSAS)
+
+```
+
+
+```{r}
+library(car)
+par(mfrow=c(2,2))
+
+### Equal Variance Assumption ###
+
+## 1. Raw Residuals vs. Fitted values
+plot(resid(LMM_WSAS, type = "response") ~ fitted(LMM_WSAS),
+    main = "Raw Residuals vs. Fitted Values",
+     ylab = "RaW Residuals",
+     ylim = c(-10, 10),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_WSAS), resid(LMM_WSAS, type = "response")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 2. Pearson Residuals vs. Fitted values
+plot(resid(LMM_WSAS, type = "pearson") ~ fitted(LMM_WSAS),
+    main = "Pearson Residuals vs. Fitted Values",
+     ylab = "Pearson Residuals",
+     ylim = c(-10, 10),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_WSAS), resid(LMM_WSAS, type = "pearson")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 3. Standardized Residuals vs. Fitted values
+plot(resid(LMM_WSAS, scaled = T) ~ fitted(LMM_WSAS),
+     main = "Standardized Residuals vs. Fitted Values",
+     ylab = "Ststandardized Residuals",
+     ylim = c(-10, 10),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_WSAS), resid(LMM_WSAS, scaled = T)), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+
+### Normally Distributed Residuals Assumption ###
+
+## 1. QQ-plot of the standardized residuals
+qqPlot(resid(LMM_WSAS, scaled = T),
+       main = "Standardized residuals vs. Quantiles",
+       ylab = "Standardized Residuals", 
+       xlab = "Quantiles",
+       pch = 19,
+       col = "cornflowerblue",
+       grid = F,
+       id = F,
+       envelope = list(style = "lines"))
+
+
+## 2. Histogram of the standardized residuals
+hist(resid(LMM_WSAS, scaled = T),
+     density = 30, col = "black",
+     main = "Distribution of the Standardized Residuals",
+     xlab = "Standardized Residuals",
+     prob = T)
+curve(dnorm(x, mean = mean(resid(LMM_WSAS, scaled = T)), 
+            sd = sd(resid(LMM_WSAS, scaled = T))),
+      col = "blue", lwd = 2, add = T, yaxt="n")
+
+```
+We see that the distribution has both right- and left-skew 
+and the distribution is peaked. Therefore, robust LMM was also performed to 
+compare the estimates.
+
+#### 5.1.4.2: Robust LMM
+
+```{r}
+library(robustlmm)
+rLMM_WSAS <- rlmer(WSAS_total ~ treatment + time +  treatment:time + (1|ID_reg), 
+                  data = test_data)
+
+summary(rLMM_WSAS)
+```
+
+
+```{r}
+# Plotting the robust LMM results
+plot(rLMM_WSAS)
+```
+
+
+```{r}
+# Comparing Regular LMM and robust LMM estimates for WSAS
+compare(LMM_WSAS, rLMM_WSAS)
+```
+
+We can see that the estimates are quite close to another so it can be 
+assumed that the results of regular LMM aren't very biased even if residuals
+have heavy tails. 
+
+
+### 5.1.5 Results of MHQol-Scores
+
+```{r}
+library(lme4)
+library(lmerTest)
+
+LMM_MHQol <- lmer(MHQol_total ~ treatment + time +  treatment:time 
+                  +  ( 1|ID_reg),
+               data = test_data,
+               REML = T)
+
+
+# Results of LMM
+summary(LMM_MHQol)
+
+```
+
+```{r}
+library(car)
+par(mfrow=c(2,2))
+
+### Equal Variance Assumption ###
+
+## 1. Raw Residuals vs. Fitted values
+plot(resid(LMM_MHQol, type = "response") ~ fitted(LMM_MHQol),
+    main = "Raw Residuals vs. Fitted Values",
+     ylab = "RaW Residuals",
+     ylim = c(-10, 10),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_MHQol), resid(LMM_MHQol, type = "response")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 2. Pearson Residuals vs. Fitted values
+plot(resid(LMM_MHQol, type = "pearson") ~ fitted(LMM_MHQol),
+    main = "Pearson Residuals vs. Fitted Values",
+     ylab = "Pearson Residuals",
+     ylim = c(-10, 10),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_MHQol), resid(LMM_MHQol, type = "pearson")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 3. Standardized Residuals vs. Fitted values
+plot(resid(LMM_MHQol, scaled = T) ~ fitted(LMM_MHQol),
+     main = "Standardized Residuals vs. Fitted Values",
+     ylab = "Ststandardized Residuals",
+     ylim = c(-10, 10),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_MHQol), resid(LMM_MHQol, scaled = T)), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+
+### Normally Distributed Residuals Assumption ###
+
+## 1. QQ-plot of the standardized residuals
+qqPlot(resid(LMM_MHQol, scaled = T),
+       main = "Standardized residuals vs. Quantiles",
+       ylab = "Standardized Residuals", 
+       xlab = "Quantiles",
+       pch = 19,
+       col = "cornflowerblue",
+       grid = F,
+       id = F,
+       envelope = list(style = "lines"))
+
+
+## 2. Histogram of the standardized residuals
+hist(resid(LMM_MHQol, scaled = T),
+     density = 30, col = "black",
+     main = "Distribution of the Standardized Residuals",
+     xlab = "Standardized Residuals",
+     prob = T)
+curve(dnorm(x, mean = mean(resid(LMM_MHQol, scaled = T)), 
+            sd = sd(resid(LMM_MHQol, scaled = T))),
+      col = "blue", lwd = 2, add = T, yaxt="n")
+
+```
+
+Residuals are slightly right-skewed but the distribution shows that they
+are approximately normally distributed.
+
+
+### 5.1.6 Results for MCTQ: Average weekly sleep duration (SDweek)
+
+```{r}
+
+# Change MCTQ variable to minutes
+test_data$mctq_SDweek <- as.numeric(test_data$mctq_SDweek) / 60
+test_data$mctq_SLossWeek <- as.numeric(test_data$mctq_SLossWeek) / 60
+test_data$mctq_SJL <- as.numeric(test_data$mctq_SJL) / 60
+
+```
+
+
+#### 5.1.6.1 Regular LMM
+
+```{r}
+library(lme4)
+library(lmerTest)
+
+LMM_mctq_SDweek <- lmer(as.numeric(mctq_SDweek) ~ treatment + time +  treatment:time 
+                     +  ( 1|ID_reg),
+               data = test_data,
+               REML = T)
+
+
+# Results of LMM
+summary(LMM_mctq_SDweek)
+```
+
+
+
+
+```{r}
+library(car)
+par(mfrow=c(2,2))
+
+### Equal Variance Assumption ###
+
+## 1. Raw Residuals vs. Fitted values
+plot(resid(LMM_mctq_SDweek, type = "response") ~ fitted(LMM_mctq_SDweek),
+    main = "Raw Residuals vs. Fitted Values",
+     ylab = "RaW Residuals",
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_mctq_SDweek), resid(LMM_mctq_SDweek, type = "response")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 2. Pearson Residuals vs. Fitted values
+plot(resid(LMM_mctq_SDweek, type = "pearson") ~ fitted(LMM_mctq_SDweek),
+    main = "Pearson Residuals vs. Fitted Values",
+     ylab = "Pearson Residuals",
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_mctq_SDweek), resid(LMM_mctq_SDweek, type = "pearson")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 3. Standardized Residuals vs. Fitted values
+plot(resid(LMM_mctq_SDweek, scaled = T) ~ fitted(LMM_mctq_SDweek),
+     main = "Standardized Residuals vs. Fitted Values",
+     ylab = "Ststandardized Residuals",
+     ylim = c(-10, 10),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_mctq_SDweek), resid(LMM_mctq_SDweek, scaled = T)), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+
+### Normally Distributed Residuals Assumption ###
+
+## 1. QQ-plot of the standardized residuals
+qqPlot(resid(LMM_mctq_SDweek, scaled = T),
+       main = "Standardized residuals vs. Quantiles",
+       ylab = "Standardized Residuals", 
+       xlab = "Quantiles",
+       pch = 19,
+       col = "cornflowerblue",
+       grid = F,
+       id = F,
+       envelope = list(style = "lines"))
+
+
+## 2. Histogram of the standardized residuals
+hist(resid(LMM_mctq_SDweek, scaled = T),
+     density = 30, col = "black",
+     main = "Distribution of the Standardized Residuals",
+     xlab = "Standardized Residuals",
+     prob = T)
+curve(dnorm(x, mean = mean(resid(LMM_mctq_SDweek, scaled = T)), 
+            sd = sd(resid(LMM_mctq_SDweek, scaled = T))),
+      col = "blue", lwd = 2, add = T, yaxt="n")
+
+```
+
+Residuals have a slight left-skew and the residuals are not equalyl distributed.
+Therefore, robust LMM was performed.
+
+#### 5.1.6.2 Robust LMM
+
+```{r}
+library(robustlmm)
+rLMM_mctq_SDweek <- rlmer(as.numeric(mctq_SDweek)  ~ 
+                               treatment + time +  treatment:time + (1|ID_reg), 
+                  data = test_data)
+
+summary(rLMM_mctq_SDweek)
+
+```
+
+
+```{r}
+plot(rLMM_mctq_SDweek)
+```
+
+```{r}
+compare(LMM_mctq_SDweek, rLMM_mctq_SDweek)
+```
+The estimates for the treatment effect and and the interaction vary
+slightly more and the others.
+
+
+
+### 5.1.7: Result for MCTQ: Weekly Sleep Loss (SLossWeek)
+
+We can see from the later figures that SLossWeek violates LMM assumptions.
+Therefore, square root transformation was used to improve the fit. Although the
+transformation improved the the distributino of residuals, there were still
+violations (as can be seen from later figures) and thereforem robust LMM
+was performed on the transformed data.
+
+#### 5.1.7.1 Regular LMM
+
+```{r}
+library(lme4)
+library(lmerTest)
+
+LMM_data <- df_questionnaire_data[!is.na(df_questionnaire_data$mctq_SLossWeek),]
+
+LMM_mctq_SLossWeek <- lmer(sqrt(as.numeric(mctq_SLossWeek)) ~ treatment + time 
+                           +  treatment:time +  ( 1|ID_reg),
+               data = test_data,
+               REML = T)
+
+
+# Results of LMM
+summary(LMM_mctq_SLossWeek)
+
+```
+
+
+
+```{r}
+library(car)
+par(mfrow=c(2,2))
+
+### Equal Variance Assumption ###
+
+## 1. Raw Residuals vs. Fitted values
+plot(resid(LMM_mctq_SLossWeek, type = "response") ~ fitted(LMM_mctq_SLossWeek),
+    main = "Raw Residuals vs. Fitted Values",
+     ylab = "RaW Residuals",
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_mctq_SLossWeek), resid(LMM_mctq_SLossWeek, 
+                                               type = "response")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 2. Pearson Residuals vs. Fitted values
+plot(resid(LMM_mctq_SLossWeek, type = "pearson") ~ fitted(LMM_mctq_SLossWeek),
+    main = "Pearson Residuals vs. Fitted Values",
+     ylab = "Pearson Residuals",
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_mctq_SLossWeek), resid(LMM_mctq_SLossWeek, 
+                                               type = "pearson")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 3. Standardized Residuals vs. Fitted values
+plot(resid(LMM_mctq_SLossWeek, scaled = T) ~ fitted(LMM_mctq_SLossWeek),
+     main = "Standardized Residuals vs. Fitted Values",
+     ylab = "Ststandardized Residuals",
+     ylim = c(-10, 10),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_mctq_SLossWeek), resid(LMM_mctq_SLossWeek, scaled = T)), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+
+### Normally Distributed Residuals Assumption ###
+
+## 1. QQ-plot of the standardized residuals
+qqPlot(resid(LMM_mctq_SLossWeek, scaled = T),
+       main = "Standardized residuals vs. Quantiles",
+       ylab = "Standardized Residuals", 
+       xlab = "Quantiles",
+       pch = 19,
+       col = "cornflowerblue",
+       grid = F,
+       id = F,
+       envelope = list(style = "lines"))
+
+
+## 2. Histogram of the standardized residuals
+hist(resid(LMM_mctq_SLossWeek, scaled = T),
+     density = 30, col = "black",
+     main = "Distribution of the Standardized Residuals",
+     xlab = "Standardized Residuals",
+     prob = T)
+curve(dnorm(x, mean = mean(resid(LMM_mctq_SLossWeek, scaled = T)), 
+            sd = sd(resid(LMM_mctq_SLossWeek, scaled = T))),
+      col = "blue", lwd = 2, add = T, yaxt="n")
+
+```
+The transformed data still violates the equal variance assumption so robust
+LMM was performed.
+
+
+#### 5.1.7.2 Robust LMM
+
+```{r}
+library(robustlmm)
+rLMM_mctq_SLossWeek <- rlmer(sqrt(as.numeric(mctq_SLossWeek))  ~ 
+                               treatment + time +  treatment:time + (1|ID_reg), 
+                  data = test_data)
+
+summary(rLMM_mctq_SLossWeek)
+```
+
+```{r}
+plot(rLMM_mctq_SLossWeek)
+```
+
+
+```{r}
+# Comparing Regular LMM and robust LMM estimates for WSAS
+compare(LMM_mctq_SLossWeek, rLMM_mctq_SLossWeek)
+```
+We can see that the regular LMM and robust LMM estimates are close to one
+another.
+
+
+
+### 5.1.8 Results for MCTQ: Social Jetlag
+
+```{r}
+library(lme4)
+library(lmerTest)
+
+LMM_mctq_SJL <- lmer(as.numeric(mctq_SJL) ~ treatment + time +  treatment:time 
+                     +  ( 1|ID_reg),
+               data = test_data,
+               REML = T)
+
+
+# Results of LMM
+summary(LMM_mctq_SJL)
+
+
+```
+
+
+
+```{r}
+library(car)
+par(mfrow=c(2,2))
+
+### Equal Variance Assumption ###
+
+## 1. Raw Residuals vs. Fitted values
+plot(resid(LMM_mctq_SJL, type = "response") ~ fitted(LMM_mctq_SJL),
+    main = "Raw Residuals vs. Fitted Values",
+     ylab = "RaW Residuals",
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_mctq_SJL), resid(LMM_mctq_SJL, type = "response")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 2. Pearson Residuals vs. Fitted values
+plot(resid(LMM_mctq_SJL, type = "pearson") ~ fitted(LMM_mctq_SJL),
+    main = "Pearson Residuals vs. Fitted Values",
+     ylab = "Pearson Residuals",
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_mctq_SJL), resid(LMM_mctq_SJL, type = "pearson")), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+## 3. Standardized Residuals vs. Fitted values
+plot(resid(LMM_mctq_SJL, scaled = T) ~ fitted(LMM_mctq_SJL),
+     main = "Standardized Residuals vs. Fitted Values",
+     ylab = "Ststandardized Residuals",
+     ylim = c(-10, 10),
+     xlab = "Fitted Values",
+     pch = 19,
+     col = "cornflowerblue")
+lines(lowess(fitted(LMM_mctq_SJL), resid(LMM_mctq_SJL, scaled = T)), 
+      col = "blue", lwd = 2)
+abline(h = 0, col = "black", lty = 2)
+
+
+### Normally Distributed Residuals Assumption ###
+
+## 1. QQ-plot of the standardized residuals
+qqPlot(resid(LMM_mctq_SJL, scaled = T),
+       main = "Standardized residuals vs. Quantiles",
+       ylab = "Standardized Residuals", 
+       xlab = "Quantiles",
+       pch = 19,
+       col = "cornflowerblue",
+       grid = F,
+       id = F,
+       envelope = list(style = "lines"))
+
+
+## 2. Histogram of the standardized residuals
+hist(resid(LMM_mctq_SJL, scaled = T),
+     density = 30, col = "black",
+     main = "Distribution of the Standardized Residuals",
+     xlab = "Standardized Residuals",
+     prob = T)
+curve(dnorm(x, mean = mean(resid(LMM_mctq_SJL, scaled = T)), 
+            sd = sd(resid(LMM_mctq_SJL, scaled = T))),
+      col = "blue", lwd = 2, add = T, yaxt="n")
+
+```
+
+## 5.2 Effect Sizes
+
+Cohen's d was calculated to estimate the effect size. For detailed 
+explanation about the effect size and the formula used in the function, 
+please refer to the report section 2.4.3 Cohen's d. 
+
+```{r}
+#######################################
+### Function to calculate Cohen's d ###
+######################################
+
+cohend_morris = function(post_t, pre_t, post_c, pre_c) {
+  #order: post treatment, pre treatment, post control, pre control
+  
+  #calculate cp
+  nT = as.numeric(length(post_t)) + as.numeric(length(pre_t))
+
+  nC = as.numeric(length(pre_c)) + as.numeric(length(post_c))
+
+  c_p = 1 - 3/(4*(nT+nC-2)-1)
+
+  #calculate pooled SD at the baseline: SDpre
+  ##requires SDpre,T, SDpre,C
+  SD_pre_T = sd(as.numeric(pre_t))
+  SD_pre_C = sd(as.numeric(pre_c))
+  SD_pre_pooled = sqrt(((nT-1)*SD_pre_T^2 + (nC-1)*SD_pre_C^2)/(nT+nC-2))
+
+  ##final d
+  d_morris = c_p*((mean(post_t) - mean(pre_t))-(mean(post_c)-mean(pre_c)))/SD_pre_pooled
+
+  return(d_morris)
+}
+```
+
+
+
+
+```{r}
+
+# Datasets without NA's
+data_pre_t <- df_pretest_Q[complete.cases(df_pretest_Q), ]
+data_post_t <- df_Q_post_final[complete.cases(df_Q_post_final), ]
+data_pre_c <- df_controlpre_Q[complete.cases(df_controlpre_Q), ]
+data_post_c <-  df_controlpost_Q[complete.cases(df_controlpost_Q), ]
+
+# Dataframe including all the effect sizes
+df_effectsizes <- data.frame(ISI = round(cohend_morris(post_t = data_post_t$ISI_total, 
+                               pre_t = data_pre_t$ISI_total,
+                               post_c = data_post_c$ISI_total,
+                               pre_c = data_pre_c$ISI_total), 2),
+                 
+                 PHQ = round(cohend_morris(post_t = data_post_t$PHQ_total, 
+                               pre_t = data_pre_t$PHQ_total,
+                               post_c = data_post_c$PHQ_total,
+                               pre_c = data_pre_c$PHQ_total), 2),
+                 
+                 GAD = round(cohend_morris(post_t = data_post_t$GAD_total, 
+                               pre_t = data_pre_t$GAD_total,
+                               post_c = data_post_c$GAD_total,
+                               pre_c = data_pre_c$GAD_total), 2),
+                 
+                 WSAS = round(cohend_morris(post_t = data_post_t$WSAS_total,
+                               pre_t = data_pre_t$WSAS_total,
+                               post_c = data_post_c$WSAS_total,
+                               pre_c = data_pre_c$WSAS_total), 2),
+                 
+                 MHQol = round(cohend_morris(post_t = data_post_t$MHQol_total, 
+                               pre_t = data_pre_t$MHQol_total,
+                               post_c = data_post_c$MHQol_total,
+                               pre_c = data_pre_c$MHQol_total), 2),
+                 
+                  mtcq_SDweek = round(cohend_morris(post_t = as.numeric(data_post_t$mctq_SDweek), 
+                               pre_t = as.numeric(data_pre_t$mctq_SDweek),
+                               post_c = as.numeric(data_post_c$mctq_SDweek),
+                               pre_c = as.numeric(data_pre_c$mctq_SDweek )), 2),
+                 
+                  mtcq_SLossWeek = round(cohend_morris(post_t = as.numeric(data_post_t$mctq_SLossWeek), 
+                               pre_t = as.numeric(data_pre_t$mctq_SLossWeek),
+                               post_c = as.numeric(data_post_c$mctq_SLossWeek),
+                               pre_c = as.numeric(data_pre_c$mctq_SLossWeek)), 2),
+                 
+                 mtcq_SJL= round(cohend_morris(post_t = as.numeric(data_post_t$mctq_SJL), 
+                               pre_t = as.numeric(data_pre_t$mctq_SJL),
+                               post_c = as.numeric(data_post_c$mctq_SJL),
+                               pre_c = as.numeric(data_pre_c$mctq_SJL)), 2)
+                 
+                 )
+
+```
+
+```{r}
+df_effectsizes
+```
+
+
+
+# 6. Extra: Interaction plots
+
+## 6.1 ISI plots
+
+```{r}
+test_data2 <- test_data
+levels(test_data2$treatment) <- c("control", "dCBTi")
+levels(test_data2$time) <- c("pre", "post")
+```
+
+
+```{r}
+
+test_data2[test_data2$treatment == 1, 11] <- "control"
+test_data2[test_data2$treatment == 2, 11] <- "dCBTi"
+
+test_data2[test_data2$time == 1, 10] <- "pre"
+test_data2[test_data2$time == 2, 10] <- "post"
+
+
+```
+
+```{r}
+# Fitting the model
+LMM_ISI2 <- lmer(ISI_total ~ treatment + time +  treatment:time +  ( 1|ID_reg),
+               data = test_data2,
+               REML = T)
+
+
+```
+
+
+
+```{r}
+library(emmeans)
+ISI_plot <- emmip(LMM_ISI2, treatment ~ time,
+  cov.keep = 3, at = list(),
+  CIs = TRUE, level = 0.95, position = "jitter",
+  xlab = "Time of Measurement",
+  ylab = "ISI Total-Score")
+```
+
+```{r}
+library(ggplot2)
+
+ISI_plot + theme_minimal()
+```
+
+
+
+
+## 6.2 GAD plots
+
+```{r}
+# Fitting the model
+LMM_GAD2 <- lmer(GAD_total ~ treatment + time +  treatment:time +  ( 1|ID_reg),
+               data = test_data2,
+               REML = T)
+
+
+```
+
+
+
+```{r}
+library(emmeans)
+library(ggplot2)
+
+GAD_plot <- emmip(LMM_GAD2, treatment ~ time,
+  cov.keep = 3, at = list(),
+  CIs = TRUE, level = 0.95, position = "jitter",
+  xlab = "Time of Measurement",
+  ylab = "GAD Total-Score") 
+
+GAD_plot + theme_minimal()
+```
+
+
+
+## 6.3 PHQ plots
+
+```{r}
+# Fitting the model
+LMM_PHQ2 <- lmer(PHQ_total ~ treatment + time +  treatment:time +  ( 1|ID_reg),
+               data = test_data2,
+               REML = T)
+
+
+```
+
+
+
+```{r}
+library(emmeans)
+library(ggplot2)
+PHQ_plot <- emmip(LMM_GAD2, treatment ~ time,
+  cov.keep = 3, at = list(),
+  CIs = TRUE, level = 0.95, position = "jitter",
+  xlab = "Time of Measurement",
+  ylab = "PHQ Total-Score") 
+
+PHQ_plot + theme_minimal()
+```
+
+
+
+## 6.4 MHQol plots
+
+```{r}
+# Fitting the model
+LMM_MHQol2 <- lmer(MHQol_total ~ treatment + time +  treatment:time 
+                   +  ( 1|ID_reg),
+               data = test_data2,
+               REML = T)
+
+
+```
+
+
+
+```{r}
+library(emmeans)
+library(ggplot2)
+MHQol_plot <- emmip(LMM_MHQol2, treatment ~ time,
+  cov.keep = 3, at = list(),
+  CIs = TRUE, level = 0.95, position = "jitter",
+  xlab = "Time of Measurement",
+  ylab = "MHQol Total-Score") 
+
+MHQol_plot + theme_minimal()
+```
+
+
+## 6.5 WSAS plots
+
+Plot based on regular LMM.
+
+```{r}
+
+LMM_WSAS2 <- lmer(WSAS_total ~ treatment + time +  treatment:time 
+                  +  ( 1|ID_reg),
+                  data = test_data2,
+                  REML = T)
+
+
+```
+
+
+
+```{r}
+library(emmeans)
+library(ggplot2)
+
+WSAS_plot <- emmip(LMM_WSAS2, treatment ~ time,
+  cov.keep = 3, at = list(),
+  CIs = TRUE, level = 0.95, position = "jitter",
+  xlab = "Time of Measurement",
+  ylab = "WSAS Total-Score") 
+
+WSAS_plot + theme_minimal() 
+```
+
+Plot based on the robust LMM. 
+
+```{r}
+library(robustlmm)
+# Fitting the model
+rLMM_WSAS2 <- rlmer(WSAS_total ~ treatment + time +  treatment:time 
+                    +  ( 1|ID_reg),
+               data = test_data2)
+
+
+```
+
+
+
+```{r}
+library(emmeans)
+library(ggplot2)
+
+WSAS_plot_r <- emmip(rLMM_WSAS2, treatment ~ time,
+  cov.keep = 3, at = list(),
+  CIs = TRUE, level = 0.95, position = "jitter",
+  xlab = "Time of Measurement",
+  ylab = "WSAS Total-Score") 
+
+WSAS_plot_r + theme_minimal()
+```
+
+
+## 6.6 MCTQ: Average Weekly Sleep Duration (SDweek) plots
+
+Plot based on regular LMM.
+
+```{r}
+
+LMM_SDweek2 <- lmer(as.numeric(mctq_SDweek) ~ treatment + time +  treatment:time 
+                    +  ( 1|ID_reg),
+                  data = test_data2,
+                  REML = T)
+
+
+```
+
+
+
+```{r}
+library(emmeans)
+library(ggplot2)
+
+SDweek_plot <- emmip(LMM_SDweek2, treatment ~ time,
+  cov.keep = 3, at = list(),
+  CIs = TRUE, level = 0.95, position = "jitter",
+  xlab = "Time of Measurement",
+  ylab = "Average Weekly Sleep Duration") 
+
+SDweek_plot + theme_minimal() 
+```
+
+Plot based on robust LMM.
+
+```{r}
+library(robustlmm)
+# Fitting the model
+rLMM_SDweek2 <- rlmer(as.numeric(mctq_SDweek) ~ treatment + time 
+                      +  treatment:time +  ( 1|ID_reg),
+               data = test_data2)
+
+
+```
+
+
+
+```{r}
+library(emmeans)
+library(ggplot2)
+
+SDweek_plot_r <- emmip(rLMM_SDweek2, treatment ~ time,
+  cov.keep = 3, at = list(),
+  CIs = TRUE, level = 0.95, position = "jitter",
+  xlab = "Time of Measurement",
+  ylab = "Average Weekly Sleep Duration") 
+
+SDweek_plot_r + theme_minimal()
+```
+
+
+
+## 6.7 MCTQ: Weekly Sleep Loss (SLossWeek) plots
+ 
+Plot based on regular LMM.
+
+```{r}
+
+LMM_SLossWeek2 <- lmer(sqrt(as.numeric(mctq_SLossWeek)) ~ treatment + time 
+                       +  treatment:time +  ( 1|ID_reg),
+                  data = test_data2,
+                  REML = T)
+
+
+```
+
+
+
+```{r}
+library(emmeans)
+library(ggplot2)
+
+SLossWeek_plot <- emmip(LMM_SLossWeek2, treatment ~ time,
+  cov.keep = 3, at = list(),
+  CIs = TRUE, level = 0.95, position = "jitter",
+  xlab = "Time of Measurement",
+  ylab = "Weekly Sleep Loss") 
+
+SLossWeek_plot + theme_minimal() 
+```
+
+Plot based on robust LMM.
+
+```{r}
+library(robustlmm)
+
+# Fitting the model
+rLMM_SLossWeek2 <- rlmer(sqrt(as.numeric(mctq_SLossWeek)) ~ treatment + time 
+                         +  treatment:time +  ( 1|ID_reg),
+               data = test_data2)
+
+
+```
+
+
+
+```{r}
+library(emmeans)
+library(ggplot2)
+
+SLossWeek_plot_r <- emmip(rLMM_SLossWeek2, treatment ~ time,
+  cov.keep = 3, at = list(),
+  CIs = TRUE, level = 0.95, position = "jitter",
+  xlab = "Time of Measurement",
+  ylab = "Weekly Sleep Loss") 
+
+SLossWeek_plot_r + theme_minimal()
+```
+
+
+
+## 6.8 MCTQ: Social Jetlag plot
+
+
+```{r}
+
+LMM_SJL2 <- lmer(as.numeric(mctq_SJL) ~ treatment + time 
+                 +  treatment:time +  ( 1|ID_reg),
+                  data = test_data2,
+                  REML = T)
+
+
+```
+
+
+
+```{r}
+library(emmeans)
+library(ggplot2)
+
+SJL_plot <- emmip(LMM_SJL2, treatment ~ time,
+  cov.keep = 3, at = list(),
+  CIs = TRUE, level = 0.95, position = "jitter",
+  xlab = "Time of Measurement",
+  ylab = "Social Jetlag") 
+
+SJL_plot + theme_minimal() 
+```
+
+
+```
+
